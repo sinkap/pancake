@@ -1,12 +1,12 @@
 #!/bin/bash
-# /init for assix initramfs (unified-rootfs architecture).
+# /init for pancake initramfs (unified-rootfs architecture).
 #
 # Requires kernel with Christian Brauner's "move_mount: allow MOVE_MOUNT_BENEATH
 # on the rootfs" fix (in bpf-next/for-next, will land in 7.2).
 #
 # 1. mount procfs/sysfs/devtmpfs
 # 2. modprobe dm-verity, overlay
-# 3. parse assix.pkg=NAME:DATA_SERIAL:HASH_SERIAL:ROOTHASH from /proc/cmdline
+# 3. parse pancake.pkg=NAME:DATA_SERIAL:HASH_SERIAL:ROOTHASH from /proc/cmdline
 # 4. veritysetup open + RO mount each pkg's verity device under /lowers/$name
 # 5. mount -t overlay  /sysroot   lowerdir=daemons:base, upperdir=tmpfs
 # 6. move proc/sys/dev + lowers + tmpfs into /sysroot
@@ -19,7 +19,7 @@
 set -e
 exec >/dev/console 2>&1
 echo
-echo "=== assix-init starting ==="
+echo "=== pancake-init starting ==="
 
 mkdir -p /proc /sys /dev /run /lowers /sysroot /upper-tmp
 mount -t proc     proc     /proc
@@ -55,10 +55,10 @@ echo "[init] parsing /proc/cmdline"
 PKGS=""
 for arg in $(cat /proc/cmdline); do
     case "$arg" in
-        assix.pkg=*) PKGS="$PKGS ${arg#assix.pkg=}" ;;
+        pancake.pkg=*) PKGS="$PKGS ${arg#pancake.pkg=}" ;;
     esac
 done
-[ -n "$PKGS" ] || { echo "[init] FATAL: no assix.pkg= on cmdline"; exec /bin/sh; }
+[ -n "$PKGS" ] || { echo "[init] FATAL: no pancake.pkg= on cmdline"; exec /bin/sh; }
 
 # Open all verity devices and mount each at /lowers/$name (RO).
 NAMES=""
@@ -100,7 +100,7 @@ mount -t overlay -o "lowerdir=$LOWERLIST,upperdir=/upper-tmp/upper,workdir=/uppe
 mount --make-private /sysroot
 
 # Move proc/sys/dev under /sysroot so they survive switch_root.
-mkdir -p /sysroot/proc /sysroot/sys /sysroot/dev /sysroot/lowers /sysroot/run/assix-rw
+mkdir -p /sysroot/proc /sysroot/sys /sysroot/dev /sysroot/lowers /sysroot/run/pancake-rw
 mount --move /proc /sysroot/proc
 mount --move /sys  /sysroot/sys
 mount --move /dev  /sysroot/dev
@@ -112,7 +112,7 @@ for name in $NAMES; do
 done
 
 # Move the upper-tmp tmpfs under /sysroot too.
-mount --move /upper-tmp /sysroot/run/assix-rw
+mount --move /upper-tmp /sysroot/run/pancake-rw
 
 echo "[init] switch_root → /sbin/init"
 exec switch_root /sysroot /sbin/init

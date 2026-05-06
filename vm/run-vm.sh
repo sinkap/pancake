@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Boot the assix VM under qemu/kvm.
+# Boot the pancake VM under qemu/kvm.
 #
 # Each package contributes 2 virtio-blk disks (data + hash). They get serial
 # numbers so the guest can find them via /dev/disk/by-id/virtio-<serial> —
@@ -13,7 +13,7 @@ cd "$(dirname "$(readlink -f "$0")")"
 # Default to the bpf-next/for-next build (Brauner's MOVE_MOUNT_BENEATH-on-rootfs
 # fix is in this build; will land in 7.2 stable).
 KERNEL="${KERNEL:-$HOME/projects/linux-bpf-for-next/arch/x86/boot/bzImage}"
-INITRD="${INITRD:-images/assix-initramfs.cpio.gz}"
+INITRD="${INITRD:-images/pancake-initramfs.cpio.gz}"
 MEM="${MEM:-2G}"
 SMP="${SMP:-2}"
 HOSTFWD_PORT="${HOSTFWD_PORT:-2222}"
@@ -42,12 +42,12 @@ for spec in "${PKGS[@]}"; do
     rh=$(cat "$rh_file")
 
     DRIVES+=( -drive "file=${img},format=raw,if=none,id=d-${name}-d,readonly=on" )
-    DRIVES+=( -device "virtio-blk,drive=d-${name}-d,serial=assix-${name}-d" )
+    DRIVES+=( -device "virtio-blk,drive=d-${name}-d,serial=pancake-${name}-d" )
     DRIVES+=( -drive "file=${hashf},format=raw,if=none,id=d-${name}-h,readonly=on" )
-    DRIVES+=( -device "virtio-blk,drive=d-${name}-h,serial=assix-${name}-h" )
+    DRIVES+=( -device "virtio-blk,drive=d-${name}-h,serial=pancake-${name}-h" )
 
     # Pass serials only; /init resolves them via /sys/block/vd*/serial.
-    APPENDS+=( "assix.pkg=${name}:assix-${name}-d:assix-${name}-h:${rh}" )
+    APPENDS+=( "pancake.pkg=${name}:pancake-${name}-d:pancake-${name}-h:${rh}" )
 done
 
 mkdir -p share

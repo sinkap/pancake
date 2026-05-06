@@ -44,7 +44,7 @@ fi
 
 # Marker
 sudo install -d -m 0755 "$STAGE/etc"
-sudo tee "$STAGE/etc/assix-version-${PKG}" >/dev/null <<<"${PKG}-${VER}"
+sudo tee "$STAGE/etc/pancake-version-${PKG}" >/dev/null <<<"${PKG}-${VER}"
 
 # Wire systemd autostart symlink — postinst would normally do `systemctl enable`.
 sudo install -d -m 0755 "$STAGE/etc/systemd/system/multi-user.target.wants"
@@ -61,7 +61,7 @@ case "$PKG" in
         sudo install -m 0644 keys/host_keys/ssh_host_ed25519_key.pub  "$STAGE/etc/ssh/"
 
         sudo tee "$STAGE/etc/ssh/sshd_config" >/dev/null <<EOF
-# assix sshd-${VER}
+# pancake sshd-${VER}
 Include /etc/ssh/sshd_config.d/*.conf
 HostKey /etc/ssh/ssh_host_rsa_key
 HostKey /etc/ssh/ssh_host_ecdsa_key
@@ -74,13 +74,13 @@ X11Forwarding no
 PrintMotd no
 AcceptEnv LANG LC_*
 EOF
-        sudo tee "$STAGE/etc/ssh/sshd_config.d/00-assix.conf" >/dev/null <<EOF
+        sudo tee "$STAGE/etc/ssh/sshd_config.d/00-pancake.conf" >/dev/null <<EOF
 PermitRootLogin prohibit-password
 PasswordAuthentication no
 PubkeyAuthentication yes
 Banner /etc/issue.net
 EOF
-        sudo tee "$STAGE/etc/issue.net" >/dev/null <<<"assix sshd ${VER}"
+        sudo tee "$STAGE/etc/issue.net" >/dev/null <<<"pancake sshd ${VER}"
 
         sudo ln -sfT /lib/systemd/system/ssh.service \
             "$STAGE/etc/systemd/system/multi-user.target.wants/ssh.service"
@@ -90,7 +90,7 @@ EOF
         # driftfile in /var/lib/chrony (RO ext4 base). Use /run instead.
         sudo install -d -m 0755 "$STAGE/etc/chrony"
         sudo tee "$STAGE/etc/chrony/chrony.conf" >/dev/null <<EOF
-# assix chronyd-${VER}
+# pancake chronyd-${VER}
 pool pool.ntp.org iburst
 driftfile /run/chrony/drift
 makestep 1.0 3

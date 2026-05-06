@@ -251,19 +251,19 @@ Symmetric with Step 3. Restores nspawn / sandboxing / propagation behavior.
 
 ```
 [in-vm] BEFORE
-  banner: assix sshd v1
+  banner: pancake sshd v1
   PID 1 mountinfo: lowerdir=/lowers/sshd:...
 
 [in-vm] pivot_root(".", "./oldroot")
 [in-vm] umount2("/oldroot", MNT_DETACH)
 
 [in-vm] AFTER
-  banner: assix sshd v2
+  banner: pancake sshd v2
   PID 1 mountinfo: lowerdir=/run/lowers/sshd-v2:...
   ssh / chrony: active
 
 # fresh ssh from outside:
-$ cat /etc/issue.net    →  assix sshd v2
+$ cat /etc/issue.net    →  pancake sshd v2
 $ chronyc tracking      →  syncing
 ```
 

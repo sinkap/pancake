@@ -1,25 +1,21 @@
-# Compiled C binaries
-assix-swap
-assix-swap-rootfs
-test-pivot-root
-test-beneath-rootfs
-test-beneath-keep-proc
+# Compiled C binary
+pivot-root
 
 # Rendered slide artifacts
 slides.pdf
 slides.html
 
 # VM build artifacts (large, regenerable)
-realworld/images/
-realworld/staging/
-realworld/share/
+vm/images/
+vm/staging/
+vm/share/
 
 # Runtime VM state
-realworld/vm.log
-realworld/vm.pid
+vm/vm.log
+vm/vm.pid
 
 # Private keys (never commit)
-realworld/keys/
+vm/keys/
 
 # Editor / OS junk
 .DS_Store

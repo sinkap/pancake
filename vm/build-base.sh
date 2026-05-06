@@ -40,7 +40,7 @@ if [ "${FORCE:-0}" = 1 ] || [ ! -d "$STAGE" ]; then
 fi
 
 log "customizing $STAGE"
-sudo tee "$STAGE/etc/hostname" >/dev/null <<<'assix-vm'
+sudo tee "$STAGE/etc/hostname" >/dev/null <<<'pancake-vm'
 
 sudo install -d -m 0755 "$STAGE/etc/systemd/network"
 sudo tee "$STAGE/etc/systemd/network/10-wired.network" >/dev/null <<'EOF'
@@ -56,19 +56,19 @@ sudo tee "$STAGE/etc/resolv.conf" >/dev/null <<<'nameserver 10.0.2.3'
 
 # Diagnostic dump at end of boot. With ssh broken there's no way in, so this
 # is our only window into VM state.
-sudo tee "$STAGE/etc/systemd/system/assix-debug.service" >/dev/null <<'EOF'
+sudo tee "$STAGE/etc/systemd/system/pancake-debug.service" >/dev/null <<'EOF'
 [Unit]
-Description=Assix end-of-boot diagnostic dump
+Description=Pancake end-of-boot diagnostic dump
 DefaultDependencies=no
 
 [Service]
 Type=oneshot
 StandardOutput=journal+console
 ExecStart=/bin/bash -c '\
-    echo "=== ASSIX DEBUG ==="; \
+    echo "=== PANCAKE DEBUG ==="; \
     echo "--- ip addr ---"; ip -4 addr; \
     echo "--- mounts at / ---"; grep " / / " /proc/self/mountinfo; \
-    echo "--- markers ---"; cat /etc/assix-version /etc/assix-version-sshd /etc/assix-version-chronyd 2>&1; \
+    echo "--- markers ---"; cat /etc/pancake-version /etc/pancake-version-sshd /etc/pancake-version-chronyd 2>&1; \
     echo "--- ssh status ---"; systemctl status ssh.service --no-pager -l 2>&1 | head -20; \
     echo "--- chrony status ---"; systemctl status chrony.service --no-pager -l 2>&1 | head -20; \
     echo "--- listening sockets ---"; ss -tlnp 2>&1 | head; \
@@ -77,11 +77,11 @@ ExecStart=/bin/bash -c '\
 [Install]
 WantedBy=multi-user.target
 EOF
-sudo chroot "$STAGE" systemctl enable assix-debug.service >/dev/null
+sudo chroot "$STAGE" systemctl enable pancake-debug.service >/dev/null
 
 # Root login by SSH key only.
 sudo install -d -m 0700 "$STAGE/root/.ssh"
-sudo install -m 0600 keys/assix_id_ed25519.pub "$STAGE/root/.ssh/authorized_keys"
+sudo install -m 0600 keys/pancake_id_ed25519.pub "$STAGE/root/.ssh/authorized_keys"
 
 # Daemon system users — postinst would normally create these. /etc/passwd is
 # ONE FILE per overlay layer (not directory) and overlay leftmost wins, so
@@ -94,6 +94,6 @@ sudo chroot "$STAGE" adduser  --system --quiet --no-create-home \
     --home /var/lib/chrony --shell /usr/sbin/nologin --ingroup _chrony _chrony 2>/dev/null || true
 
 # Marker
-sudo tee "$STAGE/etc/assix-version" >/dev/null <<<'base v1'
+sudo tee "$STAGE/etc/pancake-version" >/dev/null <<<'base v1'
 
 mk_verity_image_from_dir "$STAGE" "$OUT" base

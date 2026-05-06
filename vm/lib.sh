@@ -1,4 +1,4 @@
-# Shared helpers for assix realworld build scripts. Source from each build-*.sh.
+# Shared helpers for pancake realworld build scripts. Source from each build-*.sh.
 
 log() { printf '[%s] %s\n' "$(basename "$0" .sh)" "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -34,11 +34,11 @@ mk_verity_image_from_dir() {
 
 # Ensure the test SSH keypair exists. Used to log into the VM as root.
 ensure_ssh_key() {
-    local key="keys/assix_id_ed25519"
+    local key="keys/pancake_id_ed25519"
     if [ ! -f "$key" ]; then
         log "generating $key"
         mkdir -p keys
-        ssh-keygen -t ed25519 -N '' -C assix-test -f "$key" >/dev/null
+        ssh-keygen -t ed25519 -N '' -C pancake-test -f "$key" >/dev/null
     fi
 }
 
@@ -49,8 +49,8 @@ ensure_host_keys() {
     if [ ! -d "$d" ] || [ -z "$(ls -A "$d" 2>/dev/null)" ]; then
         log "generating SSH host keys in $d"
         mkdir -p "$d"
-        ssh-keygen -t rsa     -b 3072 -N '' -f "$d/ssh_host_rsa_key"     -C assix-vm >/dev/null
-        ssh-keygen -t ecdsa   -b 256  -N '' -f "$d/ssh_host_ecdsa_key"   -C assix-vm >/dev/null
-        ssh-keygen -t ed25519         -N '' -f "$d/ssh_host_ed25519_key" -C assix-vm >/dev/null
+        ssh-keygen -t rsa     -b 3072 -N '' -f "$d/ssh_host_rsa_key"     -C pancake-vm >/dev/null
+        ssh-keygen -t ecdsa   -b 256  -N '' -f "$d/ssh_host_ecdsa_key"   -C pancake-vm >/dev/null
+        ssh-keygen -t ed25519         -N '' -f "$d/ssh_host_ed25519_key" -C pancake-vm >/dev/null
     fi
 }

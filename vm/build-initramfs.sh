@@ -7,7 +7,7 @@ cd "$(dirname "$(readlink -f "$0")")"
 . ./lib.sh
 
 STAGE="${STAGE:-staging/initramfs}"
-OUT="${OUT:-images/assix-initramfs.cpio.gz}"
+OUT="${OUT:-images/pancake-initramfs.cpio.gz}"
 SUITE="${SUITE:-noble}"
 MIRROR="${MIRROR:-http://archive.ubuntu.com/ubuntu/}"
 COMPONENTS="${COMPONENTS:-main,universe}"
