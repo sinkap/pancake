@@ -20,7 +20,7 @@ style: |
 
 <br>
 
-KP Singh
+KP Singh · [github.com/sinkap](https://github.com/sinkap)
 
 ---
 
@@ -303,9 +303,7 @@ Verity-imaged rootfs · live atomic swap · no reboot · no systemd cooperation.
 
 <br>
 
-```
-github.com/sinkap/fs-pancake
-```
+Code & slides: **[github.com/sinkap/fs-pancake](https://github.com/sinkap/fs-pancake)**
 
 <br>
 
@@ -313,4 +311,4 @@ github.com/sinkap/fs-pancake
 
 <br>
 
-KP Singh
+KP Singh · [github.com/sinkap](https://github.com/sinkap)
