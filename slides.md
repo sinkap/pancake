@@ -59,9 +59,9 @@ Each daemon ships as its own verity-signed image; `base` carries init/systemd/li
      │  mount  /lowers/<pkg>  ro          (one per pkg)
      │  mount  overlay /sysroot           (lowerdir = sshd:chronyd:base,
      │                                     upperdir = tmpfs)
-     │  move   /proc /sys /dev /lowers → /sysroot
+     │  mount --move /lowers → /sysroot   (custom — not handled by switch_root)
      ▼
-  switch_root /sysroot /sbin/init
+  switch_root /sysroot /sbin/init        (auto-moves /proc /sys /dev /run)
      │
      ▼
   systemd  →  ssh.service · chrony.service · …

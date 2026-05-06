@@ -1,20 +1,20 @@
 #!/bin/bash
-# /init for pancake initramfs (unified-rootfs architecture).
+# /init for fs-pancake initramfs.
 #
-# Requires kernel with Christian Brauner's "move_mount: allow MOVE_MOUNT_BENEATH
-# on the rootfs" fix (in bpf-next/for-next, will land in 7.2).
+# Requires kernel with Christian Brauner's vfs series (lands in 7.2):
+# nullfs immutable rootfs + pivot_root(2) on the live rootfs.
 #
 # 1. mount procfs/sysfs/devtmpfs
 # 2. modprobe dm-verity, overlay
 # 3. parse pancake.pkg=NAME:DATA_SERIAL:HASH_SERIAL:ROOTHASH from /proc/cmdline
-# 4. veritysetup open + RO mount each pkg's verity device under /lowers/$name
-# 5. mount -t overlay  /sysroot   lowerdir=daemons:base, upperdir=tmpfs
-# 6. move proc/sys/dev + lowers + tmpfs into /sysroot
+# 4. veritysetup open + RO mount each pkg under /lowers/$name
+# 5. mount overlay /sysroot (lowerdir=daemons:base, upperdir=tmpfs)
+# 6. move /lowers + upper-tmp under /sysroot
+#    (switch_root auto-moves /proc /sys /dev /run for us)
 # 7. switch_root to /sbin/init (systemd)
 #
 # After switch_root, / IS the merged overlay. A live swap then targets / via
-# move_mount(... MOVE_MOUNT_BENEATH) which only works on the rootfs with the
-# above kernel fix.
+# pivot_root(2) — see vm/swap-pkg.sh.
 
 set -e
 exec >/dev/console 2>&1
@@ -99,19 +99,13 @@ mount -t overlay -o "lowerdir=$LOWERLIST,upperdir=/upper-tmp/upper,workdir=/uppe
 # downstream mount manipulations sane.
 mount --make-private /sysroot
 
-# Move proc/sys/dev under /sysroot so they survive switch_root.
-mkdir -p /sysroot/proc /sysroot/sys /sysroot/dev /sysroot/lowers /sysroot/run/pancake-rw
-mount --move /proc /sysroot/proc
-mount --move /sys  /sysroot/sys
-mount --move /dev  /sysroot/dev
-
-# Surface lowers under /sysroot/lowers/$name so swap-pkg.sh can address them.
+# switch_root(8) auto-moves /proc /sys /dev /run for us. Things it doesn't
+# know about — our /lowers and the upper-tmp tmpfs — we move explicitly.
+mkdir -p /sysroot/lowers /sysroot/run/pancake-rw
 for name in $NAMES; do
     mkdir -p "/sysroot/lowers/$name"
     mount --move "/lowers/$name" "/sysroot/lowers/$name"
 done
-
-# Move the upper-tmp tmpfs under /sysroot too.
 mount --move /upper-tmp /sysroot/run/pancake-rw
 
 echo "[init] switch_root → /sbin/init"
