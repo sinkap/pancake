@@ -3,151 +3,264 @@ marp: true
 theme: default
 paginate: true
 size: 16:9
+style: |
+  section { font-size: 26px; padding: 50px 60px; }
+  h1 { color: #1a1a1a; }
+  h2 { color: #2a2a2a; border-bottom: 2px solid #ddd; padding-bottom: 6px; }
+  pre { font-size: 20px; line-height: 1.4; }
+  code { font-size: 0.95em; }
+  table { font-size: 0.9em; margin: 10px auto; }
+  th, td { padding: 6px 12px; }
+  .small { font-size: 18px; color: #666; }
 ---
 
-# Live rootfs swap on Linux 7.x
+<!-- _class: lead -->
 
-Atomically replace the running rootfs of a multi-process system
-without any per-daemon cooperation.
+# FS Pancake: Atomic Updates
 
-`assix` empirical results on `bpf-next/for-next` (`7.0.0-g9f5b3ffc3f1d`).
+<br>
+
+KP Singh
 
 ---
 
-## The pancake — new mount model
+## The pancake
 
 ```
-                ┌──────────────────────────────────┐
-   user view →  │ rootfs (overlay, daemon images)  │  ← swappable
-                ├──────────────────────────────────┤
-                │ nullfs                           │  ← immutable, empty
-                │ (mount id 2, makes / have a      │     gives / a real parent
-                │  real parent for pivot_root)     │
-                └──────────────────────────────────┘
-                     PID 1's fs.root.mnt = top
+            ┌──────────────────────────────────┐
+            │  upperdir  (tmpfs, ephemeral)    │  writes
+            ├──────────────────────────────────┤
+       /    │  sshd-v1     (dm-verity ext4)    │  lowerdir, leftmost wins
+   overlay  ├──────────────────────────────────┤
+            │  chronyd-v1  (dm-verity ext4)    │
+            ├──────────────────────────────────┤
+            │  base v1     (dm-verity ext4)    │
+            ╞══════════════════════════════════╡
+            │  nullfs      (immutable, empty)  │  real rootfs
+            └──────────────────────────────────┘
 ```
 
-`nullfs`: a permanent empty `S_IMMUTABLE` directory.
-`fs/nullfs.c` — single inode, no operations, present in every namespace.
+Each daemon ships as its own verity-signed image; `base` carries init/systemd/libs.
 
 ---
 
-## Brauner's series (vfs, will land in 7.2)
+## How we get there · boot
+
+```
+  qemu/kvm
+     │
+     ▼
+  kernel + embedded initramfs
+     │  mount nullfs               (immutable real rootfs)
+     │  mount tmpfs on top         (initramfs)
+     ▼
+  /init  (PID 1)
+     │  veritysetup open  base, sshd, chronyd
+     │  mount  /lowers/<pkg>  ro          (one per pkg)
+     │  mount  overlay /sysroot           (lowerdir = sshd:chronyd:base,
+     │                                     upperdir = tmpfs)
+     │  move   /proc /sys /dev /lowers → /sysroot
+     ▼
+  switch_root /sysroot /sbin/init
+     │
+     ▼
+  systemd  →  ssh.service · chrony.service · …
+```
+
+---
+
+## Why it works now
 
 | Commit | What |
-|---|---|
-| `576ee5dfd459` | `fs: add immutable rootfs` (nullfs) |
-| `313c47f4fe4d` | `fs: use nullfs unconditionally as the real rootfs` |
-| `3c1b73fc6a4d` | `fs: add init_pivot_root()` |
-| `ccfac16e0be5` | `move_mount: allow MOVE_MOUNT_BENEATH on the rootfs` |
-| `c62a4766937e` | `move_mount: transfer MNT_LOCKED` |
-| `9b8a0ba68246` | `mount: add OPEN_TREE_NAMESPACE` |
-| `5e8969bd1927` | `mount: add FSMOUNT_NAMESPACE` |
+|--------|------|
+| `576ee5dfd459` | **`fs: add immutable rootfs`** <br> <span class="small">Introduces `nullfs` — a permanently-empty `S_IMMUTABLE` single-inode filesystem. Designed to sit at the bottom of every namespace's mount tree as a placeholder.</span> |
+| `313c47f4fe4d` | **`fs: use nullfs unconditionally as the real rootfs`** <br> <span class="small">Removes the boot-time opt-in. Every namespace now actually roots at nullfs, with the user-visible rootfs (initramfs / real /) mounted on top of it.</span> |
+| `3c1b73fc6a4d` | **`fs: add init_pivot_root()`** <br> <span class="small">Kernel-internal `pivot_root(2)` helper used during early boot to set up the namespace mount tree.</span> |
+| `ccfac16e0be5` | **`move_mount: allow MOVE_MOUNT_BENEATH on the rootfs`** <br> <span class="small">Drops the "must not be a root of some namespace" rejection. Now legal because nullfs is always the real parent.</span> |
+| `c62a4766937e` | **`move_mount: transfer MNT_LOCKED`** <br> <span class="small">When BENEATH-stacking under a locked mount, hand the lock to the new mount so the old one becomes unlockable and can be detached.</span> |
+
+<br>
+
+<span class="small">Together: `pivot_root(2)` works on a running multi-process system; no `switch_root` workarounds.</span>
 
 ---
 
-## Two primitives, two semantics
+## The atomic primitive
 
-```
-                 caller-only                       system-wide
-                 ───────────                       ───────────
-                 MOVE_MOUNT_BENEATH                pivot_root
-                 + chroot + umount2                + chroot_fs_refs
-                                                  
-                 only the calling                  every task's fs.root
-                 process's fs.root                 atomically rebased
-                 changes                           
-                                                  
-                 → container init bootstrap        → live rootfs replace
-```
-
-`chroot_fs_refs()` in `fs/fs_struct.c`:
 ```c
-for_each_process_thread(g, p) {
-    replace_path(&fs->root, old_root, new_root);
-    replace_path(&fs->pwd,  old_root, new_root);
+// fs/fs_struct.c
+void chroot_fs_refs(const struct path *old, const struct path *new) {
+    for_each_process_thread(g, p) {
+        replace_path(&p->fs->root, old, new);
+        replace_path(&p->fs->pwd,  old, new);
+    }
 }
 ```
 
----
+<br>
 
-## MOVE_MOUNT_BENEATH on /
+Called by `pivot_root(2)` at `fs/namespace.c:4727`.
 
-```
-  [ OLD ]           [ OLD ]               (gone)
-                       │                     
-                    [ NEW ]              [ NEW ]    ← visible
-     │                 │                    │       
-  [nullfs]          [nullfs]             [nullfs]   
-                                                    
-  before        after BENEATH       after MNT_DETACH
-                                                    
-  PID 1.fs.root → OLD ──────────────────► OLD (limbo)
-                                          /proc cascaded ✗
-```
-
-System breaks: every existing process's `fs.root` still points at OLD.
-
-By design — Christian's words: *"individually atomic, locally-scoped steps."*
+**Every running task's `fs.root` is rebased atomically.**
 
 ---
 
-## pivot_root — the actual swap
+## The workflow
 
-```
-  [ OLD rootfs ]    move_mount    [ OLD ] ── put_old
-                    ──────────►       ╲
-                                       ╲ chroot_fs_refs
-                                        ╲ rewrites every
-                                         ▼ fs.root pointer
-  [ NEW rootfs ]                    [ NEW rootfs ]    ← / for everyone
-       │                                  │
-  [   nullfs   ]                    [   nullfs   ]
-```
+<br>
 
-Then `umount2("/oldroot", MNT_DETACH)` drops the old.
+1. Stage new rootfs at `/run/newroot`
+2. Rbind dynamic-state mounts
+3. Make propagation private
+4. `pivot_root(2)`
+5. Unmount old
+6. Restore shared propagation
+
+<br>
+
+<span class="small">~30 lines of shell + 5 lines of C.</span>
 
 ---
 
-## The recipe
+## Step 1 · Stage new rootfs
 
-```c
-// test-pivot-root.c — works on a running multi-process system
-chdir("/run/newroot");
-mkdir("oldroot", 0755);
-syscall(SYS_pivot_root, ".", "./oldroot");   // chroot_fs_refs runs here
-chdir("/");
-umount2("/oldroot", MNT_DETACH);
+```
+                         ┌──────────────────────┐
+   /run/newroot     →    │  overlay             │
+                         │  lowerdir = NEW:base │
+                         │  upperdir = tmpfs    │
+                         └──────────────────────┘
+                              (no submounts yet)
 ```
 
-```sh
-# shell preamble: stage the new tree with submounts daemons need
+```bash
 mount -t overlay overlay /run/newroot \
-    -o lowerdir=NEW_PKG:base:CHRONYD,upperdir=...,workdir=...
+    -o lowerdir=NEW_PKG:base:CHRONYD,\
+       upperdir=/run/scratch/upper,\
+       workdir=/run/scratch/work
+```
+
+---
+
+## Step 2 · Rbind dynamic-state mounts
+
+```
+/run/newroot/
+├─ proc    ← rbind  /proc
+├─ sys     ← rbind  /sys
+├─ dev     ← rbind  /dev
+├─ run     ← rbind  /run         (systemd's sockets!)
+├─ tmp     ← rbind  /tmp
+└─ lowers  ← rbind  /lowers      (verity images)
+```
+
+```bash
 for d in proc sys dev run tmp lowers; do
     mount --rbind "/$d" "/run/newroot/$d"
     mount --make-rprivate "/run/newroot/$d"
 done
-mount --make-rprivate /
 ```
 
 ---
 
-## Demo: sshd v1 → v2 on a live VM
+## Step 3 · Make propagation private
+
+```bash
+mount --make-rprivate /
+```
+
+<br>
+
+Why: `pivot_root(2)` rejects shared propagation on `old_mnt`,
+`new_mnt`'s parent, or `root_mnt`'s parent (`fs/namespace.c:4690`).
+
+systemd hardcodes `mount(NULL, "/", NULL, MS_REC|MS_SHARED, NULL)` at boot
+(`src/shared/mount-setup.c:520`, identical in latest 261-devel). No config
+knob; only the re-exec path skips it. We flip `/` private at swap time
+and restore in step 6.
+
+---
+
+## Step 4 · the `pivot_root(2)` syscall
+
+```c
+#include <sys/syscall.h>          // no glibc wrapper exists —
+#include <unistd.h>                // we invoke it via syscall(2) directly
+
+chdir("/run/newroot");
+mkdir("oldroot", 0755);
+
+syscall(SYS_pivot_root, ".", "./oldroot");   // ← kernel syscall
+//   │
+//   └─→  inside the kernel:
+//        chroot_fs_refs(old_root, new_root)
+//        for_each_process_thread → rebase fs.root + fs.pwd
+```
 
 ```
-[in-vm] BEFORE swap:
+   Before                          After
+   ──────                          ─────
+   /        OLD overlay            /         NEW overlay
+   /run/    ...                    /oldroot  OLD overlay (moved)
+            └─ /newroot/ NEW       /...      (everything else
+                                              already rbound)
+```
+
+---
+
+## Step 5 · Drop the old root
+
+```c
+chdir("/");
+umount2("/oldroot", MNT_DETACH);
+```
+
+```
+   Before                          After
+   ──────                          ─────
+   /         NEW overlay           /         NEW overlay
+   /oldroot  OLD overlay           (gone)
+```
+
+<br>
+
+`MNT_DETACH` because daemons may still hold open fds on OLD.
+The kernel keeps OLD alive in memory until the last ref drops.
+
+---
+
+## Step 6 · Restore shared propagation
+
+```bash
+mount --make-rshared /
+```
+
+<br>
+
+Lennart, `docs/CONTAINER_INTERFACE.md` (commit `32f4e30b`):
+
+> *"The mount hierarchy of the container should be mounted MS_SHARED
+> before invoking systemd as PID 1. **Things will break at various places**
+> if this is not done."*
+
+Symmetric with Step 3. Restores nspawn / sandboxing / propagation behavior.
+
+---
+
+## Live demo · sshd v1 → v2
+
+```
+[in-vm] BEFORE
   banner: assix sshd v1
-  PID 1 mountinfo: 23 lines (lowerdir=/lowers/sshd:...)
+  PID 1 mountinfo: lowerdir=/lowers/sshd:...
 
 [in-vm] pivot_root(".", "./oldroot")
-  → kernel: chroot_fs_refs walks all tasks
 [in-vm] umount2("/oldroot", MNT_DETACH)
 
-[in-vm] AFTER:
+[in-vm] AFTER
   banner: assix sshd v2
-  PID 1 first mount: lowerdir=/run/lowers/sshd-v2:/lowers/base:/lowers/chronyd
-  systemctl is-active ssh chrony → active / active
+  PID 1 mountinfo: lowerdir=/run/lowers/sshd-v2:...
+  ssh / chrony: active
 
 # fresh ssh from outside:
 $ cat /etc/issue.net    →  assix sshd v2
@@ -156,28 +269,48 @@ $ chronyc tracking      →  syncing
 
 ---
 
-## Why this is interesting
+## Containers on the same host
 
-- No per-daemon cooperation needed — daemons unaware
-- No systemd-side magic — vanilla Ubuntu Noble systemd
-- `nullfs` removes the "rootfs has no parent" obstacle
-- Same primitive used by initramfs `pivot_root`, now usable post-boot
-- Verity-stacked overlay rootfs can be **atomically replaced** while running
+Container processes have their **own** `fs.root` (set by their runtime's own
+`pivot_root`). `chroot_fs_refs` only matches tasks whose root is the host's
+old root → **container processes are untouched**.
+
+But mount propagation severs:
 
 ```
-  Old workflow                New workflow
-  ────────────                ────────────
-  reboot → kexec              pivot_root + chroot_fs_refs
-  systemd soft-reboot         (no PID 1 re-exec)
-  per-daemon overlays         (rootfs as one unit)
+   host /              shared peer group P
+   container /         slave of P  →  receives host events
+
+   make-rprivate /     →  P destroyed; container becomes orphaned slave
+   pivot_root          →  host rootfs swapped (container ns unaffected)
+   make-rshared /      →  host joins NEW peer group P'
+                          container is NOT in P'
 ```
+
+| Setup | Impact |
+|---|---|
+| Docker / Podman (private by default) | None |
+| `systemd-nspawn --bind=…` | Bind mounts work; future host events stop reaching container |
+| Containers using rbound `/lowers`, `/run`, `/dev` | Still work (same superblock) |
 
 ---
 
-## What it does NOT solve
+<!-- _class: lead -->
 
-- Existing processes still **execute the OLD binary** (their `/proc/PID/exe` pins the old inode). Need `systemctl restart $svc` to re-exec.
-- Open file descriptors on OLD content stay valid (good — graceful)
-- New connections / new exec'd processes get NEW.
+# Wrap-up
 
-So pivot_root + restart per service = real "rolling update of a verity-image rootfs without rebooting."
+Verity-imaged rootfs · live atomic swap · no reboot · no systemd cooperation.
+
+<br>
+
+```
+github.com/sinkap/fs-pancake
+```
+
+<br>
+
+<span class="small">Kernel: bpf-next/for-next (lands in 7.2) · systemd: 255+, unmodified</span>
+
+<br>
+
+KP Singh
