@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""
+pancake — operate on a pancake-os kit (list / history / add / rollback).
+
+A "kit" is a directory laid out per DESIGN.md:
+    repo/<pkg>-<ver>/{image.img, image.hash, image.roothash, manifest.toml}
+    generations/<n>/{manifest.toml, lowers}
+    current → generations/<n>
+
+By default, --kit defaults to /var/lib/pancake/ (the in-system path). For
+host-side use point it at the kit directory you built with pancake-bootstrap.
+
+Subcommands:
+    list                 packages in the active generation
+    history              all generations, parent → child chain
+    show <pkg>           manifest of one package
+    add <foo.deb>        build a new layer from a .deb, create generation N+1,
+                         optionally make it current (--activate)
+    rollback             current → previous generation
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import os
+import shutil
+import sys
+import tempfile
+import tomllib
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pancake_lib import (
+    deb_metadata, file_sha256, make_verity_image, parse_depends, run,
+    slugify_version, write_manifest,
+)
+
+
+def kit_path(kit_arg: str | None) -> Path:
+    p = Path(kit_arg or "/var/lib/pancake")
+    if not p.is_dir():
+        sys.exit(f"pancake: kit dir not found: {p}")
+    return p
+
+
+def load_toml(p: Path) -> dict:
+    with open(p, "rb") as f:
+        return tomllib.load(f)
+
+
+def current_generation(kit: Path) -> Path:
+    """Return the actual generations/<n>/ dir, resolving the 'current' symlink."""
+    cur = kit / "current"
+    if not cur.exists():
+        sys.exit("pancake: no 'current' symlink in kit")
+    return cur.resolve()
+
+
+def latest_generation_id(kit: Path) -> int:
+    gens = (kit / "generations")
+    if not gens.is_dir():
+        return 0
+    return max((int(d.name) for d in gens.iterdir() if d.name.isdigit()),
+               default=0)
+
+
+# ───── subcommands ─────────────────────────────────────────────────────────
+
+
+def cmd_list(kit: Path, _args) -> int:
+    gen = current_generation(kit)
+    m = load_toml(gen / "manifest.toml")
+    print(f"generation {m['generation']['id']}  "
+          f"({m['generation']['description']})")
+    print(f"  created: {m['generation']['created']}")
+    print(f"  layers : {len(m.get('layer', []))}")
+    print()
+    print(f"  {'name':<36}  {'version':<28}")
+    for L in m.get("layer", []):
+        print(f"  {L['name']:<36}  {L['version']:<28}")
+    return 0
+
+
+def cmd_history(kit: Path, _args) -> int:
+    gens = (kit / "generations")
+    cur_id = int(current_generation(kit).name)
+    rows = []
+    for d in sorted((d for d in gens.iterdir() if d.name.isdigit()),
+                    key=lambda d: int(d.name)):
+        m = load_toml(d / "manifest.toml")["generation"]
+        rows.append(m)
+    print(f"  {'id':>4}  {'created':<25}  {'layers':>6}  description")
+    for m in rows:
+        marker = " *" if m["id"] == cur_id else "  "
+        n_layers = len(load_toml(gens / str(m["id"]) / "manifest.toml")
+                       .get("layer", []))
+        print(f"{marker}{m['id']:>4}  {m['created']:<25}  {n_layers:>6}  "
+              f"{m['description']}")
+    return 0
+
+
+def cmd_show(kit: Path, args) -> int:
+    gen = current_generation(kit)
+    m = load_toml(gen / "manifest.toml")
+    found = None
+    for L in m.get("layer", []):
+        if L["name"] == args.pkg:
+            found = L
+            break
+    if not found:
+        sys.exit(f"pancake: {args.pkg} not in current generation")
+    pkg_manifest = kit / found["manifest"]
+    print(pkg_manifest.read_text())
+    return 0
+
+
+def _new_generation_dir(kit: Path) -> tuple[Path, int]:
+    next_id = latest_generation_id(kit) + 1
+    new = kit / "generations" / str(next_id)
+    new.mkdir(parents=True)
+    return new, next_id
+
+
+def _write_generation(kit: Path, gen_dir: Path, gen_id: int,
+                      parent_id: int, description: str,
+                      layers: list[dict]) -> None:
+    """Write generations/N/{manifest.toml, lowers}."""
+    now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    lines = [
+        "schema = 1", "",
+        "[generation]",
+        f"id          = {gen_id}",
+        f"parent      = {parent_id}",
+        f'created     = "{now}"',
+        f'description = "{description}"',
+        "",
+    ]
+    lowers_lines = [
+        f"# fs-pancake generation {gen_id} lowers",
+        "# slug<TAB>image<TAB>hash<TAB>roothash",
+        "# overlay order: leftmost (top) FIRST",
+    ]
+    for L in layers:
+        lines += [
+            "[[layer]]",
+            f'name     = "{L["name"]}"',
+            f'version  = "{L["version"]}"',
+            f'manifest = "{L["manifest"]}"',
+            "",
+        ]
+        slug = Path(L["manifest"]).parent.name
+        roothash = (kit / "repo" / slug / "image.roothash").read_text().strip()
+        lowers_lines.append(
+            f"{slug}\trepo/{slug}/image.img\trepo/{slug}/image.hash\t{roothash}"
+        )
+    (gen_dir / "manifest.toml").write_text("\n".join(lines))
+    (gen_dir / "lowers").write_text("\n".join(lowers_lines) + "\n")
+
+
+def cmd_add(kit: Path, args) -> int:
+    """Build a new pancake layer from a .deb and create generation N+1."""
+    deb = Path(args.deb)
+    if not deb.is_file():
+        sys.exit(f"pancake: no such .deb: {deb}")
+
+    # Build the layer using the union of the current generation's layers as
+    # the lowerdir for pancake-build's overlay sandbox.
+    print(f"[pancake] building layer from {deb.name}", file=sys.stderr)
+    md = deb_metadata(deb)
+    name, version = md["Package"], md["Version"]
+    slug = f"{name}-{slugify_version(version)}"
+    pkg_dir = kit / "repo" / slug
+    if pkg_dir.exists():
+        sys.exit(f"pancake: layer {slug} already exists in repo "
+                 "(remove it first or pick a different version)")
+
+    # We need a chroot containing all current layers' files for pancake-build's
+    # overlay sandbox. The cleanest source is the original `_sandbox/` that
+    # pancake-bootstrap leaves behind when given --keep-sandbox.
+    cur_m = load_toml(current_generation(kit) / "manifest.toml")
+    sandbox = kit / "_sandbox"
+    if not sandbox.is_dir():
+        sys.exit(
+            "pancake: no _sandbox/ in kit. `add` needs the bootstrap chroot.\n"
+            "Re-run pancake-bootstrap with --keep-sandbox, or implement\n"
+            "overlay-of-images in pancake (TODO)."
+        )
+
+    bld = Path(__file__).resolve().parent / "pancake-build"
+    run([str(bld), "--deb", str(deb), "--lower", str(sandbox),
+         "--repo", str(kit / "repo")], sudo=True)
+
+    # Build the new generation manifest = current + new layer (at the top).
+    new_layer = {
+        "name": name,
+        "version": version,
+        "manifest": f"repo/{slug}/manifest.toml",
+    }
+    new_layers = [new_layer] + list(cur_m.get("layer", []))
+
+    cur_id = int(current_generation(kit).name)
+    gen_dir, new_id = _new_generation_dir(kit)
+    _write_generation(
+        kit, gen_dir, new_id, parent_id=cur_id,
+        description=f"+{name} {version}",
+        layers=new_layers,
+    )
+
+    if args.activate:
+        cur = kit / "current"
+        if cur.exists() or cur.is_symlink():
+            cur.unlink()
+        cur.symlink_to(f"generations/{new_id}")
+        print(f"[pancake] activated generation {new_id}", file=sys.stderr)
+    else:
+        print(f"[pancake] generation {new_id} staged. "
+              f"`pancake activate {new_id}` to switch.", file=sys.stderr)
+    return 0
+
+
+def cmd_activate(kit: Path, args) -> int:
+    target = kit / "generations" / str(args.id)
+    if not target.is_dir():
+        sys.exit(f"pancake: no such generation: {args.id}")
+    cur = kit / "current"
+    if cur.exists() or cur.is_symlink():
+        cur.unlink()
+    cur.symlink_to(f"generations/{args.id}")
+    print(f"[pancake] current → generations/{args.id}", file=sys.stderr)
+    return 0
+
+
+def cmd_rollback(kit: Path, _args) -> int:
+    cur_id = int(current_generation(kit).name)
+    cur_m = load_toml(current_generation(kit) / "manifest.toml")
+    parent = cur_m["generation"]["parent"]
+    if not parent:
+        sys.exit("pancake: current generation has no parent")
+    return cmd_activate(kit, argparse.Namespace(id=parent))
+
+
+# ───── argparse plumbing ───────────────────────────────────────────────────
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="pancake", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--kit", default="/var/lib/pancake",
+                    help="kit directory (default: /var/lib/pancake)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("list", help="show packages in the active generation")
+    sub.add_parser("history", help="list all generations")
+
+    sp = sub.add_parser("show", help="dump a package's manifest")
+    sp.add_argument("pkg")
+
+    sp = sub.add_parser("add",
+                        help="build a new layer from a .deb + create gen N+1")
+    sp.add_argument("deb")
+    sp.add_argument("--activate", action="store_true",
+                    help="immediately set current → the new generation")
+
+    sp = sub.add_parser("activate", help="set current → generations/<id>")
+    sp.add_argument("id", type=int)
+
+    sub.add_parser("rollback", help="current → previous generation")
+
+    args = ap.parse_args()
+    kit = kit_path(args.kit)
+
+    fn = {
+        "list": cmd_list, "history": cmd_history, "show": cmd_show,
+        "add": cmd_add, "activate": cmd_activate, "rollback": cmd_rollback,
+    }[args.cmd]
+    return fn(kit, args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

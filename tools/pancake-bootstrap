@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+"""
+pancake-bootstrap — build a complete pancake-os kit from a Debian package list.
+
+Process:
+
+  1. Run mmdebstrap to create a sandbox/ with all packages installed.
+     (postinsts run, /etc/passwd populated, systemd units enabled, etc.)
+  2. For each installed package P:
+       files = dpkg-query --admindir=sandbox/var/lib/dpkg -L P
+       copy those files into a per-package staging dir
+       build a verity image + manifest for P
+  3. Compute orphan files (in sandbox/ but not owned by any package):
+       these include /etc/passwd entries postinsts added,
+       multi-user.target.wants symlinks, etc.
+       package them as a special "pancake-state" layer.
+  4. Topological-sort the layers by Depends and write generations/1/manifest.toml
+     listing them in overlay order (leaves first → base last; leftmost wins).
+
+Usage:
+  pancake-bootstrap --suite noble --packages openssh-server,chrony \\
+                    --output /tmp/kit
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import sys
+import tempfile
+from collections import defaultdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pancake_lib import (
+    make_verity_image, parse_depends, run, slugify_version, write_manifest,
+)
+
+
+# Packages every pancake-os install needs that minbase does NOT pull.
+# init pulls systemd-sysv → systemd → libpam-systemd, etc.
+SYSTEM_BASELINE = [
+    "init", "systemd", "systemd-sysv", "libpam-systemd",
+    "udev",                         # device-node management
+    "dbus",                         # systemctl talks via D-Bus
+    "iproute2", "iputils-ping",     # basic networking
+    "ca-certificates", "netbase",
+    "kmod",                         # modprobe
+    "cryptsetup-bin", "dmsetup",    # verity tools + udev rules
+    "openssh-client",               # ssh into the VM uses host's client; nice to have
+    "less", "procps",
+]
+
+
+def mmdebstrap_sandbox(suite: str, mirror: str, packages: list[str],
+                       sandbox: Path) -> None:
+    if sandbox.exists():
+        run(["rm", "-rf", str(sandbox)], sudo=True)
+    sandbox.parent.mkdir(parents=True, exist_ok=True)
+    pkg_csv = ",".join(packages)
+    run(["mmdebstrap", "--variant=minbase", "--components=main,universe",
+         f"--include={pkg_csv}", suite, str(sandbox), mirror], sudo=True)
+
+
+def dpkg_query(sandbox: Path, *args: str) -> str:
+    """Run dpkg-query against the sandbox's admindir."""
+    admindir = sandbox / "var/lib/dpkg"
+    return run(["dpkg-query", f"--admindir={admindir}", *args],
+               capture=True, sudo=True).stdout
+
+
+def installed_packages(sandbox: Path) -> list[tuple[str, str, str]]:
+    """Return [(name, version, architecture)] for installed packages."""
+    out = dpkg_query(sandbox, "-W", "-f=${Package}\\t${Version}\\t${Architecture}\\n")
+    pkgs = []
+    for line in out.strip().splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3:
+            pkgs.append((parts[0], parts[1], parts[2]))
+    return pkgs
+
+
+def package_field(sandbox: Path, name: str, field: str) -> str:
+    """Read one field for one installed package."""
+    out = dpkg_query(sandbox, "-W", "-f=${" + field + "}", name)
+    return out.strip()
+
+
+def canonical_in_sandbox(sandbox_real: Path, logical: str) -> str | None:
+    """Canonicalize a dpkg-style path through the sandbox's symlinks.
+    e.g. /bin/ip → /usr/bin/ip when /bin is a symlink to usr/bin.
+    Returns None if the path escapes the sandbox or doesn't exist."""
+    full = (sandbox_real / logical.lstrip("/"))
+    try:
+        # Resolve parent (so symlink components in the leading dirs are
+        # traversed), keep the basename literal so it's not re-resolved.
+        parent = full.parent.resolve()
+        canon = parent / full.name
+        rel = canon.relative_to(sandbox_real)
+        return "/" + str(rel)
+    except (ValueError, OSError):
+        return None
+
+
+def package_files(sandbox: Path, name: str) -> list[str]:
+    """Return canonicalized list of files (and symlinks) owned by `name`.
+    Excludes directories. Filters dpkg-query's diversion info lines."""
+    raw = dpkg_query(sandbox, "-L", name)
+    sandbox_real = sandbox.resolve()
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in raw.strip().splitlines():
+        if not line.startswith("/") or line == "/.":
+            continue
+        canon = canonical_in_sandbox(sandbox_real, line)
+        if canon is None or canon in seen:
+            continue
+        full = sandbox_real / canon.lstrip("/")
+        try:
+            if full.is_symlink():
+                # symlink itself is an entry (don't follow)
+                pass
+            elif full.is_dir():
+                continue              # dirs implicit via mkfs.ext4 -d
+            elif not full.exists():
+                continue              # broken / missing
+        except OSError:
+            continue
+        seen.add(canon)
+        out.append(canon)
+    return out
+
+
+def stage_files(sandbox: Path, files: list[str], staging: Path) -> None:
+    """Copy `files` from sandbox into staging, preserving directory structure
+    and symlinks. Uses tar -T <filelist> to dodge ARG_MAX."""
+    if staging.exists():
+        run(["rm", "-rf", str(staging)], sudo=True)
+    staging.mkdir(parents=True)
+    if not files:
+        return
+    # Write file list (paths relative to sandbox/) to a temp file
+    listfile = staging.parent / f"{staging.name}.list"
+    listfile.write_text("\n".join(f.lstrip("/") for f in files) + "\n")
+    # tar packs (preserves symlinks/perms) → pipe → tar unpacks at staging.
+    import subprocess
+    src_tar = subprocess.Popen(
+        ["sudo", "tar", "-cf", "-", "-C", str(sandbox),
+         "--no-recursion", "-T", str(listfile)],
+        stdout=subprocess.PIPE,
+    )
+    dst_tar = subprocess.Popen(
+        ["sudo", "tar", "-xf", "-", "-C", str(staging)],
+        stdin=src_tar.stdout,
+    )
+    src_tar.stdout.close()  # so SIGPIPE works
+    src_rc = src_tar.wait()
+    dst_rc = dst_tar.wait()
+    listfile.unlink()
+    if src_rc != 0 or dst_rc != 0:
+        raise RuntimeError(
+            f"stage_files failed: tar src rc={src_rc} dst rc={dst_rc}")
+
+
+def all_real_files(sandbox: Path) -> set[str]:
+    """Every regular file + symlink under sandbox, as paths relative to /."""
+    out = run(
+        ["find", str(sandbox), "(", "-type", "f", "-o", "-type", "l", ")",
+         "-printf", "/%P\\n"],
+        capture=True, sudo=True,
+    ).stdout
+    return set(out.strip().splitlines())
+
+
+def topological_order(pkgs: list[tuple[str, str, str]],
+                      sandbox: Path) -> list[str]:
+    """Return package names in DEPENDENCY-FIRST order (libc6 → ... → openssh-server).
+    Caller will REVERSE this for overlay order (leaf first)."""
+    name_set = {p[0] for p in pkgs}
+    # Build edges: dep_name -> {dependent_name}
+    # We want dependencies BEFORE dependents.
+    deps = defaultdict(set)
+    rdeps = defaultdict(set)
+    for name, _, _ in pkgs:
+        depends = package_field(sandbox, name, "Depends")
+        for d in parse_depends(depends):
+            # Strip version constraints and alternatives ("a (>= 1) | b").
+            for alt in d.split("|"):
+                bare = alt.strip().split()[0].split(":")[0]
+                if bare in name_set and bare != name:
+                    deps[name].add(bare)
+                    rdeps[bare].add(name)
+                    break  # take first satisfiable alt
+    # Kahn topo sort: start with nodes that depend on nothing.
+    ready = sorted(n for n, _, _ in pkgs if not deps[n])
+    out: list[str] = []
+    while ready:
+        n = ready.pop(0)
+        out.append(n)
+        for child in sorted(rdeps[n]):
+            deps[child].discard(n)
+            if not deps[child]:
+                ready.append(child)
+                # keep `ready` sorted-ish for determinism
+                ready.sort()
+    # Anything unresolved → cycle; append in arbitrary order (rare).
+    for n, _, _ in pkgs:
+        if n not in out:
+            out.append(n)
+    return out
+
+
+def write_generation_manifest(gen_dir: Path, layers: list[dict],
+                              parent_id: int | None,
+                              description: str,
+                              repo_dir: Path) -> None:
+    """Write the generation manifest (TOML, for tools) plus a sister 'lowers'
+    file (TSV, shell-parseable for the initramfs)."""
+    import datetime as dt
+    now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    gen_id = int(gen_dir.name)
+    lines = [
+        "schema = 1",
+        "",
+        "[generation]",
+        f"id          = {gen_id}",
+        f"parent      = {parent_id if parent_id is not None else 0}",
+        f'created     = "{now}"',
+        f'description = "{description}"',
+        "",
+    ]
+    for L in layers:
+        lines += [
+            "[[layer]]",
+            f'name     = "{L["name"]}"',
+            f'version  = "{L["version"]}"',
+            f'manifest = "repo/{L["dir"]}/manifest.toml"',
+            "",
+        ]
+    (gen_dir / "manifest.toml").write_text("\n".join(lines))
+
+    # Sidecar for the initramfs (no TOML parser available there).
+    # Format (tab-separated, # lines are comments):
+    #   slug \t image_rel \t hash_rel \t roothash
+    lowers_lines = [
+        "# fs-pancake generation %d lowers" % gen_id,
+        "# slug<TAB>image<TAB>hash<TAB>roothash",
+        "# overlay order: leftmost (top of stack) FIRST",
+    ]
+    for L in layers:
+        roothash = (repo_dir / L["dir"] / "image.roothash"
+                    ).read_text().strip()
+        slug = L["dir"]
+        lowers_lines.append(
+            f"{slug}\trepo/{slug}/image.img\trepo/{slug}/image.hash\t{roothash}"
+        )
+    (gen_dir / "lowers").write_text("\n".join(lowers_lines) + "\n")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument("--suite", default="noble")
+    ap.add_argument("--mirror", default="http://archive.ubuntu.com/ubuntu/")
+    ap.add_argument("--packages", required=True,
+                    help="comma-separated extra packages on top of minbase")
+    ap.add_argument("--output", required=True, type=Path)
+    ap.add_argument("--keep-sandbox", action="store_true",
+                    help="don't delete sandbox/ after building")
+    args = ap.parse_args()
+
+    out = args.output
+    out.mkdir(parents=True, exist_ok=True)
+    repo = out / "repo"
+    gens = out / "generations" / "1"
+    sandbox = out / "_sandbox"
+    repo.mkdir(parents=True, exist_ok=True)
+    gens.mkdir(parents=True, exist_ok=True)
+
+    pkg_list = [p.strip() for p in args.packages.split(",") if p.strip()]
+    pkg_list = list(dict.fromkeys(SYSTEM_BASELINE + pkg_list))
+
+    print(f"\n[bootstrap] mmdebstrap → {sandbox}", file=sys.stderr)
+    mmdebstrap_sandbox(args.suite, args.mirror, pkg_list, sandbox)
+
+    pkgs = installed_packages(sandbox)
+    print(f"\n[bootstrap] {len(pkgs)} packages installed in sandbox",
+          file=sys.stderr)
+
+    # Build a per-package staging area + pancake image for each.
+    layer_records = []
+    owned_paths: set[str] = set()
+    with tempfile.TemporaryDirectory(prefix="pancake-stage-") as tmp:
+        tmp = Path(tmp)
+        for name, version, arch in pkgs:
+            print(f"\n[bootstrap] {name} {version}", file=sys.stderr)
+            files = package_files(sandbox, name)
+            owned_paths.update(files)
+            staging = tmp / name
+            stage_files(sandbox, files, staging)
+
+            slug = slugify_version(version)
+            pkg_dir = repo / f"{name}-{slug}"
+            if pkg_dir.exists():
+                run(["rm", "-rf", str(pkg_dir)], sudo=True)
+            pkg_dir.mkdir(parents=True)
+
+            roothash, data_size = make_verity_image(
+                staging, pkg_dir / "image.img", label=f"pk-{name[:12]}",
+            )
+            depends_field = package_field(sandbox, name, "Depends")
+            # Description is multi-line; keep only the synopsis to keep the
+            # manifest TOML well-formed (no embedded newlines / quotes).
+            description = package_field(sandbox, name, "Description").splitlines()[0]
+            description = description.replace('"', "'")
+            write_manifest(
+                pkg_dir,
+                name=name, version=version, arch=arch,
+                description=description,
+                depends=parse_depends(depends_field),
+                roothash=roothash, data_size=data_size,
+            )
+            layer_records.append({
+                "name": name, "version": version, "arch": arch,
+                "dir": pkg_dir.name,
+            })
+
+        # Catch-all: files in sandbox not owned by any package.
+        # These are postinst side effects (e.g. /etc/passwd updates,
+        # /etc/systemd/system/multi-user.target.wants/* symlinks).
+        print("\n[bootstrap] computing orphan (postinst-created) files",
+              file=sys.stderr)
+        every = all_real_files(sandbox)
+        # all_real_files returns paths starting with /. owned_paths comes
+        # from dpkg-query -L which also returns leading /. Both relative-to-/.
+        orphans = sorted(every - owned_paths)
+        # Filter out things that don't matter: pid files, lock files, log
+        # rotation state, etc. — but keep /etc state.
+        ignore_patterns = (
+            "/var/cache/", "/var/log/", "/var/lib/dpkg/",
+            "/var/lib/apt/", "/var/lib/systemd/random-seed",
+            "/run/", "/proc/", "/sys/", "/dev/", "/tmp/",
+        )
+        orphans = [o for o in orphans
+                   if not any(o.startswith(p) for p in ignore_patterns)]
+        print(f"  → {len(orphans)} orphan files (kept)", file=sys.stderr)
+
+        if orphans:
+            staging = tmp / "_pancake-state"
+            stage_files(sandbox, orphans, staging)
+            pkg_dir = repo / "pancake-state"
+            if pkg_dir.exists():
+                run(["rm", "-rf", str(pkg_dir)], sudo=True)
+            pkg_dir.mkdir(parents=True)
+            roothash, data_size = make_verity_image(
+                staging, pkg_dir / "image.img", label="pancake-state",
+            )
+            write_manifest(
+                pkg_dir,
+                name="pancake-state", version="1.0.0", arch="all",
+                description="post-install state (users, unit symlinks, ...)",
+                depends=[], roothash=roothash, data_size=data_size,
+            )
+            layer_records.append({
+                "name": "pancake-state", "version": "1.0.0", "arch": "all",
+                "dir": "pancake-state",
+            })
+
+    # Topological sort: dependencies first, then leaves last. We REVERSE for
+    # overlay order so leaves (most-specific) end up leftmost = topmost.
+    by_name = {L["name"]: L for L in layer_records}
+    dep_first = topological_order(pkgs, sandbox)
+    overlay_order: list[dict] = []
+    # pancake-state always at the very top so its post-install bits win.
+    if "pancake-state" in by_name:
+        overlay_order.append(by_name["pancake-state"])
+    for n in reversed(dep_first):
+        if n in by_name:
+            overlay_order.append(by_name[n])
+
+    write_generation_manifest(
+        gens, overlay_order, parent_id=None,
+        description=f"initial generation ({len(overlay_order)} layers)",
+        repo_dir=repo,
+    )
+    # current → generations/1
+    current = out / "current"
+    if current.is_symlink() or current.exists():
+        current.unlink()
+    current.symlink_to("generations/1")
+
+    if not args.keep_sandbox:
+        run(["rm", "-rf", str(sandbox)], sudo=True)
+
+    print(f"\n[bootstrap] kit ready at {out}", file=sys.stderr)
+    print(f"  layers: {len(overlay_order)}", file=sys.stderr)
+    print(f"  generation: {gens}/manifest.toml", file=sys.stderr)
+    print(f"  current → generations/1", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

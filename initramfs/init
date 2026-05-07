@@ -1,0 +1,129 @@
+#!/bin/bash
+# fs-pancake initramfs /init — manifest-driven boot.
+#
+# 1. mount procfs/sysfs/devtmpfs
+# 2. modprobe dm-verity, overlay, ext4
+# 3. find + mount the "state" partition holding /var/lib/pancake/
+#    (kernel cmdline: pancake.state=SERIAL=<serial> | LABEL=<label> | UUID=<uuid>)
+# 4. read /var/lib/pancake/current/lowers (sister to current/manifest.toml)
+# 5. for each line: veritysetup open + RO mount under /lowers/<slug>
+# 6. mount overlay /sysroot (lowerdir = all layers, leftmost wins)
+# 7. switch_root /sysroot /sbin/init  (auto-moves /proc /sys /dev /run)
+
+set -e
+exec >/dev/console 2>&1
+echo
+echo "=== fs-pancake initramfs ==="
+
+mkdir -p /proc /sys /dev /run /lowers /sysroot /upper-tmp /pancake-state
+mount -t proc     proc     /proc
+mount -t sysfs    sys      /sys
+mount -t devtmpfs dev      /dev
+
+echo "[init] modprobe dm-mod dm-verity overlay ext4"
+/sbin/modprobe dm-mod 2>/dev/null || true
+/sbin/modprobe dm-verity 2>/dev/null || /sbin/modprobe dm_verity
+/sbin/modprobe overlay
+/sbin/modprobe ext4 2>/dev/null || true
+
+# Resolve a virtio-blk serial → /dev/vdX. (Identical helper to vm/init.)
+find_by_serial() {
+    local want="$1" blk got
+    for blk in /sys/block/vd*; do
+        [ -f "$blk/serial" ] || continue
+        got=$(cat "$blk/serial" 2>/dev/null || echo)
+        if [ "$got" = "$want" ]; then
+            echo "/dev/$(basename "$blk")"
+            return 0
+        fi
+    done
+    return 1
+}
+
+for _ in 1 2 3 4 5; do
+    [ -n "$(ls /sys/block/vd* 2>/dev/null)" ] && break
+    sleep 0.2
+done
+
+# Parse pancake.state= from /proc/cmdline
+state_spec=""
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in
+        pancake.state=*) state_spec="${arg#pancake.state=}" ;;
+    esac
+done
+[ -n "$state_spec" ] || { echo "[init] FATAL: no pancake.state= on cmdline"; exec /bin/sh; }
+
+case "$state_spec" in
+    SERIAL=*)
+        ser="${state_spec#SERIAL=}"
+        state_dev=$(find_by_serial "$ser") || {
+            echo "[init] FATAL: no virtio-blk with serial=$ser"; exec /bin/sh; }
+        ;;
+    LABEL=*|UUID=*|/dev/*)
+        state_dev=$(blkid -t "$state_spec" -o device 2>/dev/null | head -1) || true
+        [ -z "$state_dev" ] && state_dev="$state_spec"
+        ;;
+    *)
+        echo "[init] FATAL: pancake.state must be SERIAL=, LABEL=, UUID= or /dev/…"
+        exec /bin/sh
+        ;;
+esac
+
+echo "[init] state partition: $state_dev"
+mount -o ro "$state_dev" /pancake-state
+
+LOWERS_FILE="/pancake-state/current/lowers"
+[ -r "$LOWERS_FILE" ] || {
+    echo "[init] FATAL: $LOWERS_FILE missing — is the state partition initialised?"
+    exec /bin/sh
+}
+
+# Stage tmpfs for the overlay's upper / work.
+mount -t tmpfs -o mode=755 tmpfs /upper-tmp
+mkdir -p /upper-tmp/upper /upper-tmp/work
+
+# Per-line: slug<TAB>image_rel<TAB>hash_rel<TAB>roothash
+LOWERLIST=""
+NAMES=""
+while IFS=$'\t' read -r slug img hash rh; do
+    case "$slug" in ''|\#*) continue ;; esac
+    data="/pancake-state/$img"
+    hashf="/pancake-state/$hash"
+    [ -r "$data" ] && [ -r "$hashf" ] || {
+        echo "[init] FATAL: $slug missing image/hash ($data / $hashf)"
+        exec /bin/sh
+    }
+    echo "[init] verity open $slug  rh=${rh:0:16}…"
+    veritysetup open "$data" "v_$slug" "$hashf" "$rh"
+    mkdir -p "/lowers/$slug"
+    mount -o ro "/dev/mapper/v_$slug" "/lowers/$slug"
+    [ -n "$LOWERLIST" ] && LOWERLIST="$LOWERLIST:"
+    LOWERLIST="$LOWERLIST/lowers/$slug"
+    NAMES="$NAMES $slug"
+done < "$LOWERS_FILE"
+
+echo "[init] mount overlay /sysroot   ($(echo "$NAMES" | wc -w) layers, via fsconfig)"
+# 132+ lowers exceeds mount(2)'s 4 KiB option-string limit; use the new
+# mount API (fsopen/fsconfig "lowerdir+"/fsmount/move_mount) via our helper.
+LOWER_ARGS=""
+for n in $NAMES; do LOWER_ARGS="$LOWER_ARGS --lower /lowers/$n"; done
+/sbin/mount-overlay --upper /upper-tmp/upper --work /upper-tmp/work \
+    --target /sysroot $LOWER_ARGS
+mount --make-private /sysroot
+
+# Move the state partition + lowers under /sysroot so the running system
+# can see and manipulate them (pancake CLI needs /var/lib/pancake to exist).
+mkdir -p /sysroot/var/lib/pancake /sysroot/lowers /sysroot/run/pancake-rw
+mount --move /pancake-state /sysroot/var/lib/pancake
+for n in $NAMES; do
+    mkdir -p "/sysroot/lowers/$n"
+    mount --move "/lowers/$n" "/sysroot/lowers/$n"
+done
+mount --move /upper-tmp /sysroot/run/pancake-rw
+
+# switch_root auto-moves /proc /sys /dev /run for us.
+echo "[init] switch_root → /sbin/init"
+exec switch_root /sysroot /sbin/init || {
+    echo "[init] switch_root FAILED, dropping to shell"; exec /bin/sh
+}
