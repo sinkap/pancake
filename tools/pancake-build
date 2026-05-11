@@ -59,8 +59,11 @@ def overlay_install(deb: Path, lower: Path, upper: Path, work: Path,
             "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
             "LANG": "C.UTF-8",
         }
+        # --force-depends: pancake-os manages deps via the generation manifest,
+        # not via dpkg's status DB. We trust the caller to have ensured all
+        # needed dep layers are stacked already.
         run(["chroot", str(merged), "dpkg", "--install",
-             "--force-confnew", "--no-triggers",
+             "--force-confnew", "--force-depends", "--no-triggers",
              f"/tmp/{deb.name}"],
             sudo=True, env={**os.environ, **env})
         run(["chroot", str(merged), "dpkg", "--triggers-only", "--pending"],

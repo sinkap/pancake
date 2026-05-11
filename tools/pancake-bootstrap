@@ -34,7 +34,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pancake_lib import (
-    make_verity_image, parse_depends, run, slugify_version, write_manifest,
+    canonical_in_sandbox, dpkg_query, installed_packages, make_verity_image,
+    package_field, package_files, parse_depends, run, slugify_version,
+    stage_files, write_manifest,
 )
 
 
@@ -50,6 +52,12 @@ SYSTEM_BASELINE = [
     "cryptsetup-bin", "dmsetup",    # verity tools + udev rules
     "openssh-client",               # ssh into the VM uses host's client; nice to have
     "less", "procps",
+    # apt is required by `pancake install <name>` (resolves deps + downloads
+    # .debs via the materialized chroot). Without it we can only `pancake add
+    # <foo.deb>`.
+    "apt",
+    # python3 runs the in-VM `pancake` CLI itself.
+    "python3",
 ]
 
 
@@ -63,104 +71,9 @@ def mmdebstrap_sandbox(suite: str, mirror: str, packages: list[str],
          f"--include={pkg_csv}", suite, str(sandbox), mirror], sudo=True)
 
 
-def dpkg_query(sandbox: Path, *args: str) -> str:
-    """Run dpkg-query against the sandbox's admindir."""
-    admindir = sandbox / "var/lib/dpkg"
-    return run(["dpkg-query", f"--admindir={admindir}", *args],
-               capture=True, sudo=True).stdout
-
-
-def installed_packages(sandbox: Path) -> list[tuple[str, str, str]]:
-    """Return [(name, version, architecture)] for installed packages."""
-    out = dpkg_query(sandbox, "-W", "-f=${Package}\\t${Version}\\t${Architecture}\\n")
-    pkgs = []
-    for line in out.strip().splitlines():
-        parts = line.split("\t")
-        if len(parts) == 3:
-            pkgs.append((parts[0], parts[1], parts[2]))
-    return pkgs
-
-
-def package_field(sandbox: Path, name: str, field: str) -> str:
-    """Read one field for one installed package."""
-    out = dpkg_query(sandbox, "-W", "-f=${" + field + "}", name)
-    return out.strip()
-
-
-def canonical_in_sandbox(sandbox_real: Path, logical: str) -> str | None:
-    """Canonicalize a dpkg-style path through the sandbox's symlinks.
-    e.g. /bin/ip → /usr/bin/ip when /bin is a symlink to usr/bin.
-    Returns None if the path escapes the sandbox or doesn't exist."""
-    full = (sandbox_real / logical.lstrip("/"))
-    try:
-        # Resolve parent (so symlink components in the leading dirs are
-        # traversed), keep the basename literal so it's not re-resolved.
-        parent = full.parent.resolve()
-        canon = parent / full.name
-        rel = canon.relative_to(sandbox_real)
-        return "/" + str(rel)
-    except (ValueError, OSError):
-        return None
-
-
-def package_files(sandbox: Path, name: str) -> list[str]:
-    """Return canonicalized list of files (and symlinks) owned by `name`.
-    Excludes directories. Filters dpkg-query's diversion info lines."""
-    raw = dpkg_query(sandbox, "-L", name)
-    sandbox_real = sandbox.resolve()
-    seen: set[str] = set()
-    out: list[str] = []
-    for line in raw.strip().splitlines():
-        if not line.startswith("/") or line == "/.":
-            continue
-        canon = canonical_in_sandbox(sandbox_real, line)
-        if canon is None or canon in seen:
-            continue
-        full = sandbox_real / canon.lstrip("/")
-        try:
-            if full.is_symlink():
-                # symlink itself is an entry (don't follow)
-                pass
-            elif full.is_dir():
-                continue              # dirs implicit via mkfs.ext4 -d
-            elif not full.exists():
-                continue              # broken / missing
-        except OSError:
-            continue
-        seen.add(canon)
-        out.append(canon)
-    return out
-
-
-def stage_files(sandbox: Path, files: list[str], staging: Path) -> None:
-    """Copy `files` from sandbox into staging, preserving directory structure
-    and symlinks. Uses tar -T <filelist> to dodge ARG_MAX."""
-    if staging.exists():
-        run(["rm", "-rf", str(staging)], sudo=True)
-    staging.mkdir(parents=True)
-    if not files:
-        return
-    # Write file list (paths relative to sandbox/) to a temp file
-    listfile = staging.parent / f"{staging.name}.list"
-    listfile.write_text("\n".join(f.lstrip("/") for f in files) + "\n")
-    # tar packs (preserves symlinks/perms) → pipe → tar unpacks at staging.
-    import subprocess
-    src_tar = subprocess.Popen(
-        ["sudo", "tar", "-cf", "-", "-C", str(sandbox),
-         "--no-recursion", "-T", str(listfile)],
-        stdout=subprocess.PIPE,
-    )
-    dst_tar = subprocess.Popen(
-        ["sudo", "tar", "-xf", "-", "-C", str(staging)],
-        stdin=src_tar.stdout,
-    )
-    src_tar.stdout.close()  # so SIGPIPE works
-    src_rc = src_tar.wait()
-    dst_rc = dst_tar.wait()
-    listfile.unlink()
-    if src_rc != 0 or dst_rc != 0:
-        raise RuntimeError(
-            f"stage_files failed: tar src rc={src_rc} dst rc={dst_rc}")
+# dpkg_query, installed_packages, package_field, package_files,
+# canonical_in_sandbox, stage_files now live in pancake_lib (shared with
+# pancake-install).
 
 
 def all_real_files(sandbox: Path) -> set[str]:
@@ -258,6 +171,192 @@ def write_generation_manifest(gen_dir: Path, layers: list[dict],
     (gen_dir / "lowers").write_text("\n".join(lowers_lines) + "\n")
 
 
+def bake_pancake_runtime(sandbox: Path) -> None:
+    """Install the pancake CLI + helpers + a systemd unit so `pancake install`
+    and `pancake swap` work inside the booted VM (not just on the host).
+
+    Drops:
+      /sbin/mount-overlay     (C, statically linked)
+      /sbin/pivot-root        (C, statically linked)
+      /usr/local/bin/pancake          (Python)
+      /usr/local/bin/pancake_lib.py   (sibling, found via __file__)
+      /usr/local/bin/pancake-build    (used by `pancake add`)
+      /etc/systemd/system/pancake-state-rw.service  (remounts state rw)
+    """
+    src_root = Path(__file__).resolve().parent.parent
+    print(f"\n[bootstrap] baking pancake runtime into sandbox", file=sys.stderr)
+
+    # 1. Compile statically so binaries don't depend on the guest's glibc
+    # version — they invoke syscalls directly + a couple of libc helpers.
+    cc_out_dir = sandbox / "sbin"
+    run(["mkdir", "-p", str(cc_out_dir)], sudo=True)
+    for src_rel, out_name in (
+        ("initramfs/mount-overlay.c", "mount-overlay"),
+        ("pivot-root.c",              "pivot-root"),
+    ):
+        src = src_root / src_rel
+        if not src.is_file():
+            sys.exit(f"[bootstrap] missing source: {src}")
+        # Build into /tmp first (host-owned), then sudo install into sandbox.
+        tmp_bin = Path(f"/tmp/_pancake-build-{out_name}")
+        run(["cc", "-O2", "-static", "-o", str(tmp_bin), str(src)])
+        run(["install", "-m", "0755", str(tmp_bin),
+             str(cc_out_dir / out_name)], sudo=True)
+        tmp_bin.unlink(missing_ok=True)
+
+    # 2. Drop the Python CLI + lib + build helper next to each other so
+    # `Path(__file__).resolve().parent` resolves to where pancake_lib.py is.
+    bin_dst = sandbox / "usr/local/bin"
+    run(["mkdir", "-p", str(bin_dst)], sudo=True)
+    for fname in ("pancake", "pancake_lib.py", "pancake-build"):
+        src = src_root / "tools" / fname
+        if not src.is_file():
+            sys.exit(f"[bootstrap] missing tool: {src}")
+        run(["install", "-m", "0755" if fname != "pancake_lib.py" else "0644",
+             str(src), str(bin_dst / fname)], sudo=True)
+
+    # 3. systemd unit: the initramfs mounts the state partition RO; pancake
+    # install/swap need to write into kit/ so we remount rw early.
+    unit = sandbox / "etc/systemd/system/pancake-state-rw.service"
+    run(["sh", "-c", f"cat > {unit} << 'EOF'\n"
+         "[Unit]\n"
+         "Description=Remount /var/lib/pancake read-write for pancake CLI\n"
+         "DefaultDependencies=no\n"
+         "ConditionPathIsMountPoint=/var/lib/pancake\n"
+         "After=local-fs.target\n"
+         "Before=multi-user.target\n"
+         "[Service]\n"
+         "Type=oneshot\n"
+         "RemainAfterExit=yes\n"
+         "ExecStart=/bin/mount -o remount,rw /var/lib/pancake\n"
+         "[Install]\n"
+         "WantedBy=multi-user.target\n"
+         "EOF"], sudo=True)
+    run(["mkdir", "-p",
+         str(sandbox / "etc/systemd/system/multi-user.target.wants")],
+        sudo=True)
+    run(["ln", "-sf", "/etc/systemd/system/pancake-state-rw.service",
+         str(sandbox / "etc/systemd/system/multi-user.target.wants/"
+                       "pancake-state-rw.service")],
+        sudo=True)
+
+
+def customize_sandbox(sandbox: Path, *, hostname: str,
+                      ssh_host_keys_dir: Path | None,
+                      ssh_authorized_keys: Path | None) -> None:
+    """Apply machine-identity customizations after mmdebstrap finishes but
+    BEFORE per-package snapshot, so the modified content lands in whichever
+    package owns each path (or the orphan pancake-state image)."""
+    print(f"\n[bootstrap] customizing sandbox", file=sys.stderr)
+
+    # /etc/hostname — owned by base-files (its content goes into base-files'
+    # pancake image).
+    print(f"  hostname → {hostname}", file=sys.stderr)
+    run(["sh", "-c", f"echo '{hostname}' > {sandbox}/etc/hostname"], sudo=True)
+
+    # SSH host keys — needed for sshd to start. Bake into the kit so a fresh
+    # boot has them. Generate fresh if no source dir is given.
+    ssh_dir = sandbox / "etc/ssh"
+    run(["mkdir", "-p", str(ssh_dir)], sudo=True)
+    if ssh_host_keys_dir:
+        print(f"  ssh host keys ← {ssh_host_keys_dir}", file=sys.stderr)
+        run(["sh", "-c",
+             f"cp -a {ssh_host_keys_dir}/ssh_host_* {ssh_dir}/"], sudo=True)
+    else:
+        print(f"  generating fresh ssh host keys in {ssh_dir}", file=sys.stderr)
+        for ktype in ("rsa", "ecdsa", "ed25519"):
+            kf = f"{ssh_dir}/ssh_host_{ktype}_key"
+            run(["sh", "-c",
+                 f"rm -f {kf} {kf}.pub && "
+                 f"ssh-keygen -q -N '' -t {ktype} -f {kf}"], sudo=True)
+    run(["sh", "-c",
+         f"chmod 600 {ssh_dir}/ssh_host_*_key && "
+         f"chmod 644 {ssh_dir}/ssh_host_*_key.pub"], sudo=True)
+
+    # authorized_keys for root — only path to log in, since RO rootfs means
+    # password auth is awkward (passwd file is in a verity image).
+    if ssh_authorized_keys:
+        if not ssh_authorized_keys.is_file():
+            sys.exit(f"--ssh-authorized-keys: not a file: {ssh_authorized_keys}")
+        print(f"  /root/.ssh/authorized_keys ← {ssh_authorized_keys}",
+              file=sys.stderr)
+        run(["mkdir", "-p", f"{sandbox}/root/.ssh"], sudo=True)
+        run(["chmod", "700", f"{sandbox}/root/.ssh"], sudo=True)
+        run(["sh", "-c",
+             f"cp {ssh_authorized_keys} {sandbox}/root/.ssh/authorized_keys"],
+            sudo=True)
+        run(["chmod", "600", f"{sandbox}/root/.ssh/authorized_keys"], sudo=True)
+
+    # End-of-boot diagnostic dump → console. Without this we have no way
+    # into the booted system (no console getty until late, sshd may not be up).
+    debug_unit = sandbox / "etc/systemd/system/pancake-debug.service"
+    run(["sh", "-c", f"cat > {debug_unit} << 'EOF'\n"
+         "[Unit]\n"
+         "Description=pancake-os end-of-boot diagnostic dump\n"
+         "DefaultDependencies=no\n"
+         "After=multi-user.target\n"
+         "[Service]\n"
+         "Type=oneshot\n"
+         "StandardOutput=journal+console\n"
+         "ExecStart=/bin/sh -c 'echo === PANCAKE DEBUG ===; "
+                  "echo --- ip ---; ip -4 addr 2>&1 | head -10; "
+                  "echo --- ss listening ---; ss -tlnp 2>&1 | head; "
+                  "echo --- ssh status ---; systemctl status ssh.socket ssh.service "
+                  "--no-pager -l 2>&1 | head -20; "
+                  "echo --- /etc/passwd sshd ---; grep ^sshd /etc/passwd; "
+                  "echo === END DEBUG ==='\n"
+         "[Install]\n"
+         "WantedBy=multi-user.target\n"
+         "EOF"], sudo=True)
+    run(["mkdir", "-p", str(sandbox / "etc/systemd/system/multi-user.target.wants")],
+        sudo=True)
+    run(["ln", "-sf", "/etc/systemd/system/pancake-debug.service",
+         str(sandbox / "etc/systemd/system/multi-user.target.wants/pancake-debug.service")],
+        sudo=True)
+
+    # Network: enable DHCP on the first ether iface via systemd-networkd.
+    run(["mkdir", "-p", str(sandbox / "etc/systemd/network")], sudo=True)
+    run(["sh", "-c", f"cat > {sandbox}/etc/systemd/network/10-wired.network << 'EOF'\n"
+         "[Match]\n"
+         "Type=ether\n"
+         "[Network]\n"
+         "DHCP=yes\n"
+         "EOF"], sudo=True)
+    run(["chroot", str(sandbox), "systemctl", "enable", "systemd-networkd"],
+        sudo=True, check=False)
+    # qemu user-mode networking provides DNS at 10.0.2.3
+    run(["sh", "-c",
+         f"echo 'nameserver 10.0.2.3' > {sandbox}/etc/resolv.conf"], sudo=True)
+
+    # Replace /etc/ssh/sshd_config wholesale. The .deb-shipped sshd_config
+    # is a stub waiting for debconf to fill it in; sshd_config.d/*.conf is
+    # NOT included unless we write the include line ourselves.
+    sshd_main = sandbox / "etc/ssh/sshd_config"
+    run(["sh", "-c", f"cat > {sshd_main} << 'EOF'\n"
+         "# /etc/ssh/sshd_config — pancake-os baseline\n"
+         "Port 22\n"
+         "HostKey /etc/ssh/ssh_host_rsa_key\n"
+         "HostKey /etc/ssh/ssh_host_ecdsa_key\n"
+         "HostKey /etc/ssh/ssh_host_ed25519_key\n"
+         "PermitRootLogin prohibit-password\n"
+         "PasswordAuthentication no\n"
+         "PubkeyAuthentication yes\n"
+         "AuthorizedKeysFile .ssh/authorized_keys\n"
+         "ChallengeResponseAuthentication no\n"
+         "UsePAM no\n"
+         "UseDNS no\n"
+         "GSSAPIAuthentication no\n"
+         "X11Forwarding no\n"
+         "PrintMotd no\n"
+         "AcceptEnv LANG LC_*\n"
+         "Subsystem sftp /usr/lib/openssh/sftp-server\n"
+         "EOF"], sudo=True)
+
+    # Final step: bake the pancake runtime (CLI, helpers, remount unit) so
+    # `pancake install` / `pancake swap` work inside the booted VM.
+    bake_pancake_runtime(sandbox)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -270,6 +369,13 @@ def main() -> int:
     ap.add_argument("--output", required=True, type=Path)
     ap.add_argument("--keep-sandbox", action="store_true",
                     help="don't delete sandbox/ after building")
+    ap.add_argument("--hostname", default="pancake",
+                    help="hostname baked into /etc/hostname (default: pancake)")
+    ap.add_argument("--ssh-host-keys", type=Path, default=None,
+                    help="dir with ssh_host_*_key files to use; "
+                         "fresh keys are generated if omitted")
+    ap.add_argument("--ssh-authorized-keys", type=Path, default=None,
+                    help="path to a file installed at /root/.ssh/authorized_keys")
     args = ap.parse_args()
 
     out = args.output
@@ -285,6 +391,13 @@ def main() -> int:
 
     print(f"\n[bootstrap] mmdebstrap → {sandbox}", file=sys.stderr)
     mmdebstrap_sandbox(args.suite, args.mirror, pkg_list, sandbox)
+
+    customize_sandbox(
+        sandbox,
+        hostname=args.hostname,
+        ssh_host_keys_dir=args.ssh_host_keys,
+        ssh_authorized_keys=args.ssh_authorized_keys,
+    )
 
     pkgs = installed_packages(sandbox)
     print(f"\n[bootstrap] {len(pkgs)} packages installed in sandbox",
@@ -337,11 +450,11 @@ def main() -> int:
         # all_real_files returns paths starting with /. owned_paths comes
         # from dpkg-query -L which also returns leading /. Both relative-to-/.
         orphans = sorted(every - owned_paths)
-        # Filter out things that don't matter: pid files, lock files, log
-        # rotation state, etc. — but keep /etc state.
+        # Filter out runtime/cache state but KEEP /var/lib/dpkg so the booted
+        # system (and `pancake add` later) can query "what's installed".
         ignore_patterns = (
-            "/var/cache/", "/var/log/", "/var/lib/dpkg/",
-            "/var/lib/apt/", "/var/lib/systemd/random-seed",
+            "/var/cache/", "/var/log/", "/var/lib/apt/",
+            "/var/lib/systemd/random-seed",
             "/run/", "/proc/", "/sys/", "/dev/", "/tmp/",
         )
         orphans = [o for o in orphans

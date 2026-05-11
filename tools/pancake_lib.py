@@ -98,6 +98,105 @@ def make_verity_image(
     return m.group(1), data_size
 
 
+def dpkg_query(sandbox: Path, *args: str) -> str:
+    """Run dpkg-query against a sandbox's admindir."""
+    admindir = sandbox / "var/lib/dpkg"
+    return run(["dpkg-query", f"--admindir={admindir}", *args],
+               capture=True, sudo=True).stdout
+
+
+def installed_packages(sandbox: Path) -> list[tuple[str, str, str]]:
+    out = dpkg_query(sandbox, "-W", "-f=${Package}\\t${Version}\\t${Architecture}\\n")
+    pkgs = []
+    for line in out.strip().splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3:
+            pkgs.append((parts[0], parts[1], parts[2]))
+    return pkgs
+
+
+def package_field(sandbox: Path, name: str, field: str) -> str:
+    out = dpkg_query(sandbox, "-W", "-f=${" + field + "}", name)
+    return out.strip()
+
+
+def canonical_in_sandbox(sandbox_real: Path, logical: str) -> str | None:
+    """Resolve a dpkg-style path through the sandbox's symlinks (usrmerge)."""
+    full = (sandbox_real / logical.lstrip("/"))
+    try:
+        parent = full.parent.resolve()
+        canon = parent / full.name
+        rel = canon.relative_to(sandbox_real)
+        return "/" + str(rel)
+    except (ValueError, OSError):
+        return None
+
+
+def package_files(sandbox: Path, name: str) -> list[str]:
+    """List of files, symlinks, and EMPTY directories owned by `name`,
+    canonicalized through usrmerge. Filters dpkg-query diversion info lines.
+
+    Non-empty directories are skipped: tar recreates them implicitly when
+    it extracts files. Empty directories (e.g. /var/cache/apt/archives/partial)
+    must be staged explicitly or apt/dpkg will refuse to operate."""
+    raw = dpkg_query(sandbox, "-L", name)
+    sandbox_real = sandbox.resolve()
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in raw.strip().splitlines():
+        if not line.startswith("/") or line == "/.":
+            continue
+        canon = canonical_in_sandbox(sandbox_real, line)
+        if canon is None or canon in seen:
+            continue
+        full = sandbox_real / canon.lstrip("/")
+        try:
+            if full.is_symlink():
+                pass
+            elif full.is_dir():
+                try:
+                    if any(full.iterdir()):
+                        continue   # non-empty: tar will recreate implicitly
+                except OSError:
+                    continue
+                # empty dir: keep so apt/dpkg/etc see the expected layout
+            elif not full.exists():
+                continue
+        except OSError:
+            continue
+        seen.add(canon)
+        out.append(canon)
+    return out
+
+
+def stage_files(sandbox: Path, files: list[str], staging: Path) -> None:
+    """Copy `files` from sandbox into staging (preserving structure)."""
+    if staging.exists():
+        run(["rm", "-rf", str(staging)], sudo=True)
+    staging.mkdir(parents=True)
+    if not files:
+        return
+    listfile = staging.parent / f"{staging.name}.list"
+    listfile.write_text("\n".join(f.lstrip("/") for f in files) + "\n")
+    import subprocess
+    # Skip sudo when already root (e.g. inside the booted pancake-os VM,
+    # which doesn't ship sudo by default).
+    sudo_pfx = ["sudo"] if os.geteuid() != 0 else []
+    src = subprocess.Popen(
+        sudo_pfx + ["tar", "-cf", "-", "-C", str(sandbox),
+                    "--no-recursion", "-T", str(listfile)],
+        stdout=subprocess.PIPE,
+    )
+    dst = subprocess.Popen(
+        sudo_pfx + ["tar", "-xf", "-", "-C", str(staging)], stdin=src.stdout,
+    )
+    src.stdout.close()
+    s_rc, d_rc = src.wait(), dst.wait()
+    listfile.unlink()
+    if s_rc != 0 or d_rc != 0:
+        raise RuntimeError(f"stage_files failed: src rc={s_rc} dst rc={d_rc}")
+
+
 def write_manifest(
     out_dir: Path, *, name: str, version: str, arch: str = "amd64",
     description: str = "", depends: list[str] | None = None,
