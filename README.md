@@ -36,17 +36,11 @@ fs-pancake/
 ├── slides.md                 walkthrough deck (Marp markdown)
 ├── DESIGN.md                 architecture + manifest schema + workflows
 │
-├── tools/                    pancake-os tooling
-│   ├── pancake-go/               Go module — single static binary per tool
-│   │   ├── cmd/pancake               list / history / show / install /
-│   │   │                             activate / rollback / swap
-│   │   ├── cmd/pancake-build         one .deb → one verity image + manifest
-│   │   ├── cmd/pancake-bootstrap     mmdebstrap + per-package snapshot →
-│   │   │                             complete kit (~150 layers + gen 1)
-│   │   └── internal/{runner,kit,deb,layer,sandbox}
-│   │                                 shared library code
-│   ├── pack-kit-disk.sh          wrap a kit dir into an ext4 disk image
-│   └── build-pancake-initramfs.sh    build the manifest-driven initramfs
+└── tools/pancake-go/         Go module — ONE static binary, all subcommands
+    ├── cmd/pancake               list / history / show / activate / rollback /
+    │                             install / swap / build / bootstrap
+    └── internal/                 runner, kit, deb, layer, sandbox, pack,
+                                  initramfs (shared library code)
 │
 ├── initramfs/                manifest-driven /init
 │   ├── init                      reads /var/lib/pancake/current/lowers,
@@ -78,37 +72,41 @@ Lands in Linux 7.2.
 
 ## Quick start
 
-### 0. Build the Go tooling (one-time per checkout)
+### 0. Build the CLI (one-time per checkout)
 
 ```sh
 cd tools/pancake-go
-go build -ldflags="-s -w" -o ./bin/ ./cmd/...
-# → bin/pancake  bin/pancake-build  bin/pancake-bootstrap
-# Each is a self-contained ~2 MB statically-linked ELF — no runtime deps,
-# no python in the kit.
+go build -ldflags="-s -w" -o ./bin/ ./cmd/pancake
+# → ONE 2.6 MB statically-linked ELF: bin/pancake
+# All subcommands live under it: list, history, show, activate, rollback,
+# install, swap, build, bootstrap. No python, no runtime deps.
 ```
 
-### 1. Build a kit + boot pancake-os in QEMU
+### 1. Build a kit + disk image + initramfs in one command
 
 ```sh
-# 1. build a complete pancake-os kit (~150 .deb-derived layers + initial generation)
-sudo tools/pancake-go/bin/pancake-bootstrap \
-    --suite noble \
-    --packages openssh-server,chrony,nano \
-    --output /var/tmp/pancake-kit \
-    --hostname pancake \
-    --src-root $(pwd) \
-    --ssh-authorized-keys ~/.ssh/authorized_keys
+sudo tools/pancake-go/bin/pancake bootstrap \
+    --suite      noble \
+    --packages   openssh-server,chrony,nano \
+    --output     /var/tmp/pancake-kit \
+    --hostname   pancake \
+    --src-root   $(pwd) \
+    --ssh-authorized-keys ~/.ssh/authorized_keys \
+    --image      /var/tmp/pancake-state.img \
+    --initramfs  /var/tmp/pancake-initramfs.cpio.gz \
+    --kver       7.0.0-g9f5b3ffc3f1d
+```
 
-# 2. wrap the kit into a virtio-blk disk image
-sudo tools/pack-kit-disk.sh /var/tmp/pancake-kit /var/tmp/pancake-state.img
+`--image` and `--initramfs` default to `./pancake-state.img` and
+`./pancake-initramfs.cpio.gz` in the current directory; pass an empty
+string (`--image=""`) to skip either step. `--kver` defaults to the
+running host's `uname -r`.
 
-# 3. build the initramfs (manifest-driven /init)
-sudo KVER=7.0.0-g9f5b3ffc3f1d \
-    tools/build-pancake-initramfs.sh /var/tmp/pancake-initramfs.cpio.gz
+### 2. Boot
 
-# 4. boot — `format=raw,readonly=off` so `pancake install` / `pancake swap`
-#    can write back into the kit at runtime.
+```sh
+# format=raw,readonly=off so `pancake install` / `pancake swap` can write
+# back into the kit at runtime.
 sudo qemu-system-x86_64 -enable-kvm -cpu host -m 4G -smp 4 \
     -kernel ~/projects/linux-bpf-for-next/arch/x86/boot/bzImage \
     -initrd /var/tmp/pancake-initramfs.cpio.gz \
@@ -118,10 +116,10 @@ sudo qemu-system-x86_64 -enable-kvm -cpu host -m 4G -smp 4 \
     -netdev user,id=net0,hostfwd=tcp::2222-:22 \
     -device virtio-net,netdev=net0 \
     -nographic
-# → systemd up, multi-user.target reached in ~3s, ~150 verity layers stacked
+# → systemd up, multi-user.target reached in ~3 s, ~150 verity layers stacked
 ```
 
-### 2. Use the `pancake` CLI
+### 3. Use the `pancake` CLI
 
 The same binary runs on the host (operating on a kit dir on disk) and inside
 the booted VM (where it can also do `install` and `swap`).

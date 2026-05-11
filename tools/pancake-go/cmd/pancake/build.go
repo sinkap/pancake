@@ -1,6 +1,6 @@
-// pancake-build — turn one .deb into one verity layer + manifest.
+// `pancake build`: turn one .deb into one verity layer + manifest.
 //
-// Process (matches the python pancake-build):
+// Process (matches the historical pancake-build):
 //
 //  1. Mount overlay sandbox: lower = the cumulative chroot of already-built
 //     packages, upper = scratch tmpfs.
@@ -12,16 +12,16 @@
 //  5. mkfs.ext4 + veritysetup format on the upper layer → image.img + image.hash
 //  6. Write manifest.toml with package metadata + roothash + Depends:.
 //
-// Usage:
-//
-//	pancake-build --deb foo.deb --lower CHROOT --repo OUTDIR
+// `pancake install` is the higher-level workflow — it materializes the
+// kit, runs apt to resolve deps, then snapshots each new package directly.
+// `pancake build` is the manual override for when you have a single .deb
+// already + a chroot to install it against.
 package main
 
 import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 
@@ -160,7 +160,7 @@ func buildOne(debPath, lower, repo string) (string, error) {
 
 	imgPath := filepath.Join(outDir, "image.img")
 	roothash, dataSize, err := layer.MakeVerity(upper, imgPath,
-		"pk-"+truncate(md.Package, 12), 8)
+		"pk-"+truncateStr(md.Package, 12), 8)
 	if err != nil {
 		return "", err
 	}
@@ -201,42 +201,36 @@ func buildOne(debPath, lower, repo string) (string, error) {
 	return outDir, nil
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
+// cmdBuild is the `pancake build` subcommand. It ignores the global --kit
+// (build operates on a free-standing --repo dir) but accepts the
+// (k *kit.Kit, args) signature for dispatch uniformity.
+func cmdBuild(_ *kit.Kit, args []string) int {
+	fs := flag.NewFlagSet("build", flag.ContinueOnError)
+	debPath := fs.String("deb", "", "path to .deb to build")
+	lower := fs.String("lower", "",
+		"dependency chroot to use as overlay lowerdir")
+	repo := fs.String("repo", "",
+		"output dir; package goes to <repo>/<name>-<ver>/")
+	// build takes no positional args (--deb, --lower, --repo all carry values),
+	// so direct Parse is safe and correct for "--foo VAL" separate-token form.
+	if err := fs.Parse(args); err != nil {
+		return 2
 	}
-	return s[:n]
-}
-func firstLine(s string) string {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			return s[:i]
-		}
-	}
-	return s
-}
-
-func main() {
-	log.SetFlags(0)
-	debPath := flag.String("deb", "", "path to .deb to build")
-	lower := flag.String("lower", "", "dependency chroot to use as overlay lowerdir")
-	repo := flag.String("repo", "", "output dir; package goes to <repo>/<name>-<ver>/")
-	flag.Parse()
-
 	if *debPath == "" || *lower == "" || *repo == "" {
-		fmt.Fprintln(os.Stderr, "usage: pancake-build --deb foo.deb --lower CHROOT --repo OUTDIR")
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr,
+			"usage: pancake build --deb foo.deb --lower CHROOT --repo OUTDIR")
+		return 2
 	}
 	if fi, err := os.Stat(*debPath); err != nil || fi.IsDir() {
 		fmt.Fprintf(os.Stderr, "no such .deb: %s\n", *debPath)
-		os.Exit(2)
+		return 2
 	}
 	if fi, err := os.Stat(*lower); err != nil || !fi.IsDir() {
 		fmt.Fprintf(os.Stderr, "lower not a directory: %s\n", *lower)
-		os.Exit(2)
+		return 2
 	}
 	if _, err := buildOne(*debPath, *lower, *repo); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return die(err)
 	}
+	return 0
 }

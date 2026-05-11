@@ -234,16 +234,21 @@ func bakePancakeRuntime(sandbox string, a bootstrapArgs) error {
 		_ = os.Remove(tmpBin)
 	}
 
-	// 2. Drop the Go pancake + pancake-build binaries. Locate them in this
-	// order: explicit --pancake-bin / --pancake-build-bin flag → next to
-	// the bootstrap binary → $PATH.
-	for _, pair := range []struct{ flagPath, name string }{
-		{a.PancakeBin, "pancake"},
-		{a.PancakeBuildBin, "pancake-build"},
-	} {
-		bin, err := locateBin(pair.flagPath, pair.name)
-		if err != nil {
-			return err
+	// 2. Drop the single Go pancake binary into /usr/local/bin/. Default
+	// path is the executable that's running right now (this `pancake`
+	// itself), so `pancake bootstrap` always bakes in the same version of
+	// the CLI it ships. Override with --pancake-bin if cross-building.
+	{
+		bin := a.PancakeBin
+		if bin == "" {
+			exe, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("locate self: %w", err)
+			}
+			bin = exe
+		}
+		if _, err := os.Stat(bin); err != nil {
+			return fmt.Errorf("--pancake-bin: %w", err)
 		}
 		if err := runner.Run(runner.Cmd{
 			Argv: []string{"install", "-d", "-m", "0755",
@@ -254,7 +259,7 @@ func bakePancakeRuntime(sandbox string, a bootstrapArgs) error {
 		}
 		if err := runner.Run(runner.Cmd{
 			Argv: []string{"install", "-m", "0755", bin,
-				filepath.Join(sandbox, "usr/local/bin", pair.name)},
+				filepath.Join(sandbox, "usr/local/bin", "pancake")},
 			Sudo: true,
 		}); err != nil {
 			return err
@@ -296,30 +301,8 @@ WantedBy=multi-user.target
 	})
 }
 
-// locateBin: explicit > sibling-of-bootstrap > $PATH. Errors if none found.
-func locateBin(explicit, name string) (string, error) {
-	if explicit != "" {
-		if _, err := os.Stat(explicit); err != nil {
-			return "", fmt.Errorf("--%s: %w", name+"-bin", err)
-		}
-		return explicit, nil
-	}
-	exe, err := os.Executable()
-	if err == nil {
-		sibling := filepath.Join(filepath.Dir(exe), name)
-		if _, err := os.Stat(sibling); err == nil {
-			return sibling, nil
-		}
-	}
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		p := filepath.Join(dir, name)
-		if fi, err := os.Stat(p); err == nil && fi.Mode()&0o111 != 0 {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("cannot find %q binary; pass --%s-bin",
-		name, name)
-}
+// (locateBin removed: with the consolidated single-binary CLI, the bake
+// step always uses os.Executable() — the running pancake itself.)
 
 // writeFileSudo writes content to dst using `sh -c "cat > dst"` under sudo
 // so root-owned destinations work without changing process credentials.

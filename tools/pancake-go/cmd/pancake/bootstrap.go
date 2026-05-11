@@ -1,21 +1,26 @@
-// pancake-bootstrap — build a complete pancake-os kit from a Debian package list.
+// `pancake bootstrap`: build a complete pancake-os kit from a Debian
+// package list, optionally also packing the disk image and building the
+// initramfs in one go.
 //
 // Process:
 //
-//  1. Run mmdebstrap to create _sandbox/ with all packages installed
-//     (postinsts run, /etc/passwd populated, units enabled, etc).
-//  2. Customize: hostname, ssh host keys, authorized_keys, debug+networkd
-//     units, sshd_config, then bake the pancake runtime (Go binaries +
-//     systemd remount unit).
-//  3. For each installed package: stage files → mkfs.ext4 + verity format →
-//     manifest.
-//  4. Orphans (postinst side effects not owned by any package) → pancake-state
-//     layer.
-//  5. Topo-sort by Depends, write generations/1/manifest.toml + lowers,
+//  1. mmdebstrap → _sandbox/ with all packages installed.
+//  2. Customize sandbox: hostname, ssh host keys, authorized_keys, debug +
+//     networkd units, sshd_config; bake the pancake binary (this same
+//     executable) + the C helpers (mount-overlay, pivot-root) + the
+//     systemd remount unit.
+//  3. For each installed package: stage files → mkfs.ext4 + verity format
+//     → manifest.
+//  4. Orphans (postinst side effects not owned by any package) →
+//     pancake-state layer.
+//  5. Topo-sort by Depends, write generations/1/{manifest.toml,lowers},
 //     point current → generations/1.
+//  6. With --image PATH: pack the kit into one ext4 disk image at PATH.
+//  7. With --initramfs PATH: build the manifest-driven initramfs against
+//     /lib/modules/<--kver> and write to PATH.
 //
-// Pure file ops + mmdebstrap; no live overlay-of-N-layers stress on the
-// host kernel. Safe to run on the build machine.
+// Pure file ops + mmdebstrap + mkfs/cpio. No live overlay-of-N-layers
+// stress on the host kernel. Safe to run on the build machine.
 package main
 
 import (
@@ -25,10 +30,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/deb"
+	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/initramfs"
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/layer"
+	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/pack"
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/runner"
 )
 
@@ -50,30 +58,43 @@ var SystemBaseline = []string{
 	"apt", // pancake install needs apt inside the materialized chroot
 }
 
-func main() {
-	suite := flag.String("suite", "noble", "Debian/Ubuntu suite")
-	mirror := flag.String("mirror", "http://archive.ubuntu.com/ubuntu/", "")
-	pkgs := flag.String("packages", "", "comma-separated extra packages")
-	out := flag.String("output", "", "kit output directory (required)")
-	hostname := flag.String("hostname", "pancake", "/etc/hostname")
-	keepSandbox := flag.Bool("keep-sandbox", false,
+// cmdBootstrap is the `pancake bootstrap` subcommand.
+func cmdBootstrap(_ *kit.Kit, args []string) int {
+	fs := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
+	suite := fs.String("suite", "noble", "Debian/Ubuntu suite")
+	mirror := fs.String("mirror",
+		"http://archive.ubuntu.com/ubuntu/", "apt mirror URL")
+	pkgs := fs.String("packages", "",
+		"comma-separated extra packages on top of the system baseline")
+	out := fs.String("output", "", "kit output directory (required)")
+	hostname := fs.String("hostname", "pancake", "/etc/hostname")
+	keepSandbox := fs.Bool("keep-sandbox", false,
 		"don't delete _sandbox after building")
-	sshHostKeys := flag.String("ssh-host-keys", "",
+	sshHostKeys := fs.String("ssh-host-keys", "",
 		"dir with ssh_host_*_key files (else generate fresh)")
-	sshAuthKeys := flag.String("ssh-authorized-keys", "",
+	sshAuthKeys := fs.String("ssh-authorized-keys", "",
 		"file installed at /root/.ssh/authorized_keys")
-	pancakeBin := flag.String("pancake-bin", "",
-		"path to the pancake binary to bake (default: next to bootstrap or $PATH)")
-	pancakeBuildBin := flag.String("pancake-build-bin", "",
-		"path to the pancake-build binary to bake")
-	srcRoot := flag.String("src-root", "",
+	pancakeBin := fs.String("pancake-bin", "",
+		"path to the pancake binary to bake (default: this executable)")
+	srcRoot := fs.String("src-root", "",
 		"path to fs-pancake source tree (for mount-overlay.c, pivot-root.c)")
-	flag.Parse()
+	image := fs.String("image", "./pancake-state.img",
+		"pack the kit into an ext4 disk image at this path; empty to skip")
+	initramfsPath := fs.String("initramfs", "./pancake-initramfs.cpio.gz",
+		"build the manifest-driven initramfs at this path; empty to skip")
+	kver := fs.String("kver", currentKVer(),
+		"kernel version under /lib/modules/<KVER> for --initramfs")
 
+	// bootstrap has no positional args; every flag carries a value, so the
+	// splitFlagsAndPositionals helper would incorrectly demote those values
+	// to "positionals". Direct Parse handles "--foo VAL" cleanly.
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 	if *out == "" || *pkgs == "" {
 		fmt.Fprintln(os.Stderr,
-			"usage: pancake-bootstrap --packages a,b,c --output DIR [flags]")
-		os.Exit(2)
+			"usage: pancake bootstrap --packages a,b,c --output DIR [flags]")
+		return 2
 	}
 
 	if err := bootstrap(bootstrapArgs{
@@ -86,20 +107,42 @@ func main() {
 		SSHHostKeysDir:  *sshHostKeys,
 		SSHAuthKeysFile: *sshAuthKeys,
 		PancakeBin:      *pancakeBin,
-		PancakeBuildBin: *pancakeBuildBin,
 		SrcRoot:         *srcRoot,
+		ImagePath:       *image,
+		InitramfsPath:   *initramfsPath,
+		KVer:            *kver,
 	}); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return die(err)
 	}
+	return 0
+}
+
+// currentKVer returns uname -r for the running host, used as the default
+// for --kver when --initramfs is set. Caller can override.
+func currentKVer() string {
+	var u syscall.Utsname
+	if err := syscall.Uname(&u); err != nil {
+		return ""
+	}
+	b := make([]byte, 0, len(u.Release))
+	for _, c := range u.Release {
+		if c == 0 {
+			break
+		}
+		b = append(b, byte(c))
+	}
+	return string(b)
 }
 
 type bootstrapArgs struct {
-	Suite, Mirror, Output, Hostname                   string
-	Packages                                          []string
-	KeepSandbox                                       bool
-	SSHHostKeysDir, SSHAuthKeysFile                   string
-	PancakeBin, PancakeBuildBin, SrcRoot              string
+	Suite, Mirror, Output, Hostname string
+	Packages                        []string
+	KeepSandbox                     bool
+	SSHHostKeysDir, SSHAuthKeysFile string
+	PancakeBin, SrcRoot             string
+	ImagePath                       string
+	InitramfsPath                   string
+	KVer                            string
 }
 
 func bootstrap(a bootstrapArgs) error {
@@ -170,7 +213,7 @@ func bootstrap(a bootstrapArgs) error {
 		}
 		roothash, dataSize, err := layer.MakeVerity(staging,
 			filepath.Join(pkgDir, "image.img"),
-			"pk-"+truncate(p.Name, 12), 0)
+			"pk-"+truncateStr(p.Name, 12), 0)
 		if err != nil {
 			return err
 		}
@@ -290,6 +333,39 @@ func bootstrap(a bootstrapArgs) error {
 	fmt.Fprintf(os.Stderr, "  generation: %s/manifest.toml\n",
 		filepath.Join(a.Output, "generations/1"))
 	fmt.Fprintln(os.Stderr, "  current → generations/1")
+
+	// Optional: pack disk image.
+	if a.ImagePath != "" {
+		fmt.Fprintf(os.Stderr,
+			"\n[bootstrap] packing disk image → %s\n", a.ImagePath)
+		if err := pack.Disk(a.Output, a.ImagePath); err != nil {
+			return fmt.Errorf("pack: %w", err)
+		}
+	}
+
+	// Optional: build initramfs.
+	if a.InitramfsPath != "" {
+		fmt.Fprintf(os.Stderr,
+			"\n[bootstrap] building initramfs (kver=%s) → %s\n",
+			a.KVer, a.InitramfsPath)
+		srcRoot := a.SrcRoot
+		if srcRoot == "" {
+			// Same default the bake step uses: derive from os.Executable.
+			if exe, err := os.Executable(); err == nil {
+				// .../tools/pancake-go/bin/pancake → fs-pancake/
+				srcRoot = filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(exe))))
+			}
+		}
+		if err := initramfs.Build(initramfs.Opts{
+			OutPath: a.InitramfsPath,
+			KVer:    a.KVer,
+			SrcRoot: srcRoot,
+			Suite:   a.Suite,
+			Mirror:  a.Mirror,
+		}); err != nil {
+			return fmt.Errorf("initramfs: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -354,17 +430,4 @@ func dedup(xs []string) []string {
 	return out
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
-}
-func firstLine(s string) string {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			return s[:i]
-		}
-	}
-	return s
-}
+// truncate, firstLine live in install.go (shared across cmd/pancake files).

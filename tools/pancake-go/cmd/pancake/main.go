@@ -20,18 +20,23 @@ import (
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: pancake [--kit DIR] <subcommand> [args]
 
+inspect:
   list                show packages in the active generation
   history             list all generations
   show <pkg>          dump a package manifest
-  activate <id>       set current → generations/<id>
-  rollback            current → previous generation
 
-  add <foo.deb>       build a new layer from a .deb + create gen N+1
-                      (requires --keep-sandbox or runs materialize_current)
+modify (host):
+  bootstrap           mmdebstrap → kit + (optionally) disk image + initramfs
+  build               turn one .deb into one verity layer + manifest
+
+modify (in-VM only — operate on the running pancake-os):
   install <pkg>...    apt-resolve + build deps as layers + create gen N+1
-  swap [<id>]         live pivot_root onto a generation (in-VM only)
+  activate <id>       set current → generations/<id>  (offline; for next boot)
+  rollback            current → previous generation
+  swap [<id>]         live pivot_root onto a generation, no reboot
 
-Default --kit is /var/lib/pancake (the in-system path).`)
+Default --kit is /var/lib/pancake (the in-system path). For host-side use
+point it at the kit directory you built with bootstrap.`)
 }
 
 func main() {
@@ -54,10 +59,19 @@ func main() {
 		return
 	}
 
-	k, err := kit.Open(kitDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pancake: %v\n", err)
-		os.Exit(1)
+	// `bootstrap` and `build` operate on a free-standing path, not on a
+	// pre-existing kit, so we don't pre-validate the --kit dir for them.
+	var k *kit.Kit
+	switch sub {
+	case "bootstrap", "build":
+		// nil kit; subcommand owns its own paths
+	default:
+		var err error
+		k, err = kit.Open(kitDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pancake: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	var rc int
@@ -76,11 +90,10 @@ func main() {
 		rc = cmdInstall(k, args)
 	case "swap":
 		rc = cmdSwap(k, args)
-	case "add":
-		fmt.Fprintf(os.Stderr, "pancake: %q not yet implemented in the Go port\n", sub)
-		rc = 2
-	case "-h", "--help", "help":
-		usage()
+	case "build":
+		rc = cmdBuild(k, args)
+	case "bootstrap":
+		rc = cmdBootstrap(k, args)
 	default:
 		fmt.Fprintf(os.Stderr, "pancake: unknown subcommand %q\n", sub)
 		usage()
