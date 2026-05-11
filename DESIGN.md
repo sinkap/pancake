@@ -182,21 +182,11 @@ pancake update [pkg]
   Old version's image stays in repo/ until `pancake gc` collects it.
 ```
 
-## What this replaces in the old vm/ harness
-
-| Old (`vm/`) | New (`tools/` + `initramfs/`) |
-|---|---|
-| `build-base.sh` (curated mmdebstrap base) | `pancake-bootstrap` (every .deb a layer) |
-| `build-pkg.sh` (per-daemon overlay) | `pancake-build` (per-.deb overlay) |
-| `init` (cmdline-driven mounts) | `initramfs/init` (manifest-driven) |
-| `swap-pkg.sh` (manual orchestration) | `pancake install/rollback/update` |
-
-`pivot-root.c` and `run-vm.sh` are unchanged.
-
 ## Status (this document is alive)
 
-- [ ] tools/pancake-build
-- [ ] tools/pancake-bootstrap
-- [ ] tools/pancake (CLI)
-- [ ] initramfs/init (manifest-driven)
-- [ ] vm/ integration
+- [x] `pancake build` (one .deb → verity layer)
+- [x] `pancake bootstrap` (mmdebstrap → kit + disk image + initramfs)
+- [x] `pancake` CLI (list / history / show / install / activate / rollback / swap)
+- [x] `initramfs/init` (manifest-driven boot)
+- [ ] Signed `generations/N/manifest.toml` + TPM-anchored rollback counter
+      (see follow-up; see README "current symlink" discussion)

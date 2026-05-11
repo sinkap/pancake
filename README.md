@@ -42,18 +42,13 @@ fs-pancake/
     └── internal/                 runner, kit, deb, layer, sandbox, pack,
                                   initramfs (shared library code)
 │
-├── initramfs/                manifest-driven /init
-│   ├── init                      reads /var/lib/pancake/current/lowers,
-│   │                             opens verity for each layer, mounts
-│   │                             overlay via fsconfig, switch_root
-│   └── mount-overlay.c           fsopen + N × fsconfig(lowerdir+) + fsmount
-│                                 — bypasses mount(2)'s 4 KiB option-string
-│                                 cap (essential for 100+ lowerdirs)
-│
-└── vm/                       earlier-generation harness (curated base +
-                              per-daemon overlay; kept as the swap-only
-                              demo. The newer pancake-os tooling above
-                              supersedes it.)
+└── initramfs/                manifest-driven /init
+    ├── init                      reads /var/lib/pancake/current/lowers,
+    │                             opens verity for each layer, mounts
+    │                             overlay via fsconfig, switch_root
+    └── mount-overlay.c           fsopen + N × fsconfig(lowerdir+) + fsmount
+                                  — bypasses mount(2)'s 4 KiB option-string
+                                  cap (essential for 100+ lowerdirs)
 ```
 
 ## Required kernel
