@@ -27,15 +27,19 @@ func cmdInstall(k *kit.Kit, args []string) int {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	activate := fs.Bool("activate", false,
 		"set current → the new generation immediately")
-	if err := fs.Parse(args); err != nil {
+	// Go's flag.Parse stops at the first non-flag arg, which means
+	// `pancake install htop --activate` would silently ignore --activate
+	// and treat it as a no-op. Pre-split so flags can appear anywhere.
+	flagArgs, positional := splitFlagsAndPositionals(args)
+	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
-	if fs.NArg() == 0 {
+	if len(positional) == 0 {
 		fmt.Fprintln(os.Stderr,
 			"usage: pancake install <pkg>... [--activate]")
 		return 2
 	}
-	packages := fs.Args()
+	packages := positional
 
 	// Read current generation so we can compute "what's new" later.
 	curGenPath, err := k.CurrentGeneration()
@@ -218,6 +222,24 @@ func cmdInstall(k *kit.Kit, args []string) int {
 func die(err error) int {
 	fmt.Fprintln(os.Stderr, err)
 	return 1
+}
+
+// splitFlagsAndPositionals partitions argv into (flag-tokens, positionals)
+// so the stdlib flag package's "stop at first non-flag" rule doesn't cause
+// `pancake install htop --activate` to silently drop --activate.
+//
+// Handles --foo, --foo=val, -f, -f=val. Does NOT handle the "--foo val"
+// (separate-token value) form because none of pancake's flags use it; if
+// any do later, this needs to grow a little.
+func splitFlagsAndPositionals(args []string) (flags, positional []string) {
+	for _, a := range args {
+		if len(a) > 1 && a[0] == '-' {
+			flags = append(flags, a)
+		} else {
+			positional = append(positional, a)
+		}
+	}
+	return
 }
 func truncateStr(s string, n int) string {
 	if len(s) <= n {
