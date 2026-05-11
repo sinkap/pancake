@@ -33,6 +33,7 @@ import (
 	"syscall"
 
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/deb"
+	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/efi"
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/initramfs"
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/layer"
@@ -95,6 +96,15 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		"after building, drop the kernel bzImage at this path so the QEMU "+
 			"-kernel arg can point at it without extracting from the kit; "+
 			"empty to skip")
+	efiOut := fs.String("efi", "",
+		"build a UEFI-bootable disk image at this path (GPT + ESP + rootfs, "+
+			"systemd-boot + a UKI bundling kernel/initrd/cmdline). When set, "+
+			"the QEMU command needs no -kernel/-initrd args, just OVMF + the "+
+			"image. Independent of --image (which produces a kit-only ext4); "+
+			"empty (default) to skip.")
+	cmdline := fs.String("cmdline",
+		"console=ttyS0 rdinit=/init pancake.state=LABEL=PANCAKE_STATE",
+		"kernel cmdline baked into the UKI when --efi is set")
 
 	// bootstrap has no positional args; every flag carries a value, so the
 	// splitFlagsAndPositionals helper would incorrectly demote those values
@@ -124,6 +134,8 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		Kernel:          *kernel,
 		BzImagePath:     *bzimage,
 		BzImageOutPath:  *bzimageOut,
+		EFIPath:         *efiOut,
+		Cmdline:         *cmdline,
 	}); err != nil {
 		return die(err)
 	}
@@ -168,6 +180,11 @@ type bootstrapArgs struct {
 	// kit owns the canonical (verity-protected) copy; this is just a
 	// convenience handoff.
 	BzImageOutPath string
+	// EFIPath: when set, build a UEFI-bootable disk image (GPT + ESP +
+	// rootfs, systemd-boot + UKI). Independent of ImagePath.
+	EFIPath string
+	// Cmdline: kernel cmdline baked into the UKI when EFIPath is set.
+	Cmdline string
 }
 
 func bootstrap(a bootstrapArgs) error {
@@ -421,6 +438,40 @@ func bootstrap(a bootstrapArgs) error {
 			Mirror:  a.Mirror,
 		}); err != nil {
 			return fmt.Errorf("initramfs: %w", err)
+		}
+	}
+
+	// Optional: build a UEFI-bootable disk image. Needs the bzImage and
+	// initramfs to exist; if either was suppressed via empty flags, error
+	// clearly rather than silently producing nothing.
+	if a.EFIPath != "" {
+		if a.BzImageOutPath == "" {
+			return fmt.Errorf("--efi requires --bzimage-out (the kernel " +
+				"to bundle into the UKI). Set both, or skip --efi.")
+		}
+		if a.InitramfsPath == "" {
+			return fmt.Errorf("--efi requires --initramfs (the initramfs " +
+				"to bundle into the UKI). Set both, or skip --efi.")
+		}
+		fmt.Fprintf(os.Stderr,
+			"\n[bootstrap] building UKI + EFI disk → %s\n", a.EFIPath)
+		uki := strings.TrimSuffix(a.EFIPath, filepath.Ext(a.EFIPath)) + ".uki.efi"
+		if err := efi.BuildUKI(efi.UKIOpts{
+			Linux:   a.BzImageOutPath,
+			Initrd:  a.InitramfsPath,
+			Cmdline: a.Cmdline,
+			Out:     uki,
+			UName:   a.Kernel,
+		}); err != nil {
+			return fmt.Errorf("uki: %w", err)
+		}
+		if err := efi.PackEFIDisk(efi.EFIDiskOpts{
+			Out:    a.EFIPath,
+			KitDir: a.Output,
+			UKI:    uki,
+			GenID:  1,
+		}); err != nil {
+			return fmt.Errorf("efi disk: %w", err)
 		}
 	}
 	return nil

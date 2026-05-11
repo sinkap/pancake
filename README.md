@@ -102,8 +102,41 @@ sudo tools/pancake-go/bin/pancake bootstrap \
 | `--image` | `./pancake-state.img` | ext4 disk image of the kit, for QEMU `-drive` |
 | `--initramfs` | `./pancake-initramfs.cpio.gz` | manifest-driven initramfs, for QEMU `-initrd` |
 | `--bzimage-out` | `./pancake-bzImage` | the kernel binary, for QEMU `-kernel` |
+| `--efi` | `""` (off) | UEFI-bootable disk image (GPT + ESP + rootfs, systemd-boot + UKI). When set, QEMU needs only OVMF + this image — no `-kernel`/`-initrd`. |
+| `--cmdline` | `console=ttyS0 rdinit=/init pancake.state=LABEL=PANCAKE_STATE` | kernel cmdline baked into the UKI for `--efi` |
 
 Pass an empty string to skip any one step (e.g. `--image=""`).
+
+### EFI boot (no `-kernel` arg)
+
+When `--efi PATH` is set, bootstrap also writes:
+
+- a Unified Kernel Image (UKI) at `<PATH>.uki.efi` — bzImage + initrd + cmdline as one signable PE binary, built via `systemd-ukify`
+- a GPT disk at `PATH` with two partitions:
+  - p1: ESP (vfat, ~256 MB) holding `systemd-bootx64.efi` + `/EFI/Linux/pancake-1.efi` (the UKI) + `/loader/loader.conf`
+  - p2: ext4 with the kit, label `PANCAKE_STATE`
+
+Boot:
+
+```sh
+sudo cp /usr/share/OVMF/OVMF_VARS_4M.fd /var/tmp/OVMF_VARS-pancake.fd
+sudo chmod 666 /var/tmp/OVMF_VARS-pancake.fd
+sudo qemu-system-x86_64 -enable-kvm -cpu host -m 4G \
+    -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+    -drive if=pflash,format=raw,file=/var/tmp/OVMF_VARS-pancake.fd \
+    -drive file=/var/tmp/pancake-efi.img,format=raw,if=virtio \
+    -netdev user,id=n,hostfwd=tcp::2222-:22 -device virtio-net,netdev=n \
+    -nographic
+```
+
+OVMF reads the ESP, loads systemd-boot, autodiscovers the UKI in
+`/EFI/Linux/`, jumps to the kernel; initramfs finds `LABEL=PANCAKE_STATE`,
+mounts the overlay, switches root. Whole boot chain is one disk file plus
+the firmware.
+
+This path is also where the future TPM signing story lands: the UKI is a
+single file that `sbsign` / `cosign` can sign, and UEFI Secure Boot
+verifies before loading. Each generation can ship its own signed UKI.
 
 **Kernel selection:**
 
