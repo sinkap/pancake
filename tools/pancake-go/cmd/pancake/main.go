@@ -72,7 +72,11 @@ func main() {
 		rc = cmdActivate(k, args)
 	case "rollback":
 		rc = cmdRollback(k, args)
-	case "add", "install", "swap":
+	case "install":
+		rc = cmdInstall(k, args)
+	case "swap":
+		rc = cmdSwap(k, args)
+	case "add":
 		fmt.Fprintf(os.Stderr, "pancake: %q not yet implemented in the Go port\n", sub)
 		rc = 2
 	case "-h", "--help", "help":
