@@ -89,13 +89,19 @@ sudo tools/pancake-go/bin/pancake bootstrap \
     --ssh-authorized-keys ~/.ssh/authorized_keys \
     --image      /var/tmp/pancake-state.img \
     --initramfs  /var/tmp/pancake-initramfs.cpio.gz \
-    --kver       7.0.0-g9f5b3ffc3f1d
+    --kernel     7.0.0-g9f5b3ffc3f1d
 ```
 
 `--image` and `--initramfs` default to `./pancake-state.img` and
 `./pancake-initramfs.cpio.gz` in the current directory; pass an empty
-string (`--image=""`) to skip either step. `--kver` defaults to the
-running host's `uname -r`.
+string (`--image=""`) to skip either step.
+
+`--kernel` is the **modules version** — the suffix of `/lib/modules/<value>`
+on the build host whose modules get baked into the initramfs. Default is
+the running host's `uname -r`. The kernel **binary** (`bzImage`) is
+QEMU's `-kernel` argument at boot and is *not* part of the bootstrap
+output; you point QEMU at it directly (typically `arch/x86/boot/bzImage`
+in your kernel build tree). The two must match versions.
 
 ### 2. Boot
 

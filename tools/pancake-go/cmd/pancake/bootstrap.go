@@ -82,8 +82,10 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		"pack the kit into an ext4 disk image at this path; empty to skip")
 	initramfsPath := fs.String("initramfs", "./pancake-initramfs.cpio.gz",
 		"build the manifest-driven initramfs at this path; empty to skip")
-	kver := fs.String("kver", currentKVer(),
-		"kernel version under /lib/modules/<KVER> for --initramfs")
+	kernel := fs.String("kernel", currentKVer(),
+		"kernel VERSION under /lib/modules/<VERSION> whose modules get baked "+
+			"into --initramfs (default: uname -r). The kernel BINARY "+
+			"(bzImage) is QEMU's -kernel arg at boot, not handled here.")
 
 	// bootstrap has no positional args; every flag carries a value, so the
 	// splitFlagsAndPositionals helper would incorrectly demote those values
@@ -110,7 +112,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		SrcRoot:         *srcRoot,
 		ImagePath:       *image,
 		InitramfsPath:   *initramfsPath,
-		KVer:            *kver,
+		Kernel:          *kernel,
 	}); err != nil {
 		return die(err)
 	}
@@ -142,7 +144,11 @@ type bootstrapArgs struct {
 	PancakeBin, SrcRoot             string
 	ImagePath                       string
 	InitramfsPath                   string
-	KVer                            string
+	// Kernel is a VERSION string like "7.0.0-g9f5b3ffc3f1d" — the suffix
+	// of /lib/modules/<Kernel> on the build host. We bake those modules
+	// into the initramfs. The kernel BINARY (bzImage) is QEMU's -kernel
+	// arg at boot, not handled by pancake bootstrap.
+	Kernel string
 }
 
 func bootstrap(a bootstrapArgs) error {
@@ -346,8 +352,8 @@ func bootstrap(a bootstrapArgs) error {
 	// Optional: build initramfs.
 	if a.InitramfsPath != "" {
 		fmt.Fprintf(os.Stderr,
-			"\n[bootstrap] building initramfs (kver=%s) → %s\n",
-			a.KVer, a.InitramfsPath)
+			"\n[bootstrap] building initramfs (kernel=%s) → %s\n",
+			a.Kernel, a.InitramfsPath)
 		srcRoot := a.SrcRoot
 		if srcRoot == "" {
 			// Same default the bake step uses: derive from os.Executable.
@@ -358,7 +364,7 @@ func bootstrap(a bootstrapArgs) error {
 		}
 		if err := initramfs.Build(initramfs.Opts{
 			OutPath: a.InitramfsPath,
-			KVer:    a.KVer,
+			KVer:    a.Kernel,
 			SrcRoot: srcRoot,
 			Suite:   a.Suite,
 			Mirror:  a.Mirror,
