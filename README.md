@@ -89,19 +89,37 @@ sudo tools/pancake-go/bin/pancake bootstrap \
     --ssh-authorized-keys ~/.ssh/authorized_keys \
     --image      /var/tmp/pancake-state.img \
     --initramfs  /var/tmp/pancake-initramfs.cpio.gz \
-    --kernel     7.0.0-g9f5b3ffc3f1d
+    --kernel     7.0.0-g9f5b3ffc3f1d \
+    --bzimage    ~/projects/linux-bpf-for-next/arch/x86/boot/bzImage \
+    --bzimage-out /var/tmp/pancake-bzImage
 ```
 
-`--image` and `--initramfs` default to `./pancake-state.img` and
-`./pancake-initramfs.cpio.gz` in the current directory; pass an empty
-string (`--image=""`) to skip either step.
+**Outputs (all defaults to current directory):**
 
-`--kernel` is the **modules version** — the suffix of `/lib/modules/<value>`
-on the build host whose modules get baked into the initramfs. Default is
-the running host's `uname -r`. The kernel **binary** (`bzImage`) is
-QEMU's `-kernel` argument at boot and is *not* part of the bootstrap
-output; you point QEMU at it directly (typically `arch/x86/boot/bzImage`
-in your kernel build tree). The two must match versions.
+| flag | default | what it produces |
+|---|---|---|
+| `--output` | (required) | the kit dir (repo/, generations/, current symlink) |
+| `--image` | `./pancake-state.img` | ext4 disk image of the kit, for QEMU `-drive` |
+| `--initramfs` | `./pancake-initramfs.cpio.gz` | manifest-driven initramfs, for QEMU `-initrd` |
+| `--bzimage-out` | `./pancake-bzImage` | the kernel binary, for QEMU `-kernel` |
+
+Pass an empty string to skip any one step (e.g. `--image=""`).
+
+**Kernel selection:**
+
+| flag | meaning |
+|---|---|
+| `--kernel` | VERSION suffix of `/lib/modules/<value>` on the build host. Modules baked into the initramfs come from there. Default: `uname -r`. |
+| `--bzimage PATH` | path to a custom-built bzImage. When set, bootstrap **skips `linux-image-generic`** and instead packs two synthetic verity layers: `pancake-kernel` (`/boot/vmlinuz` from PATH) and `pancake-modules` (`/lib/modules/<--kernel>/` from the host). Use this for kernels not in any apt repo (bpf-next, linux-next, your own builds). |
+
+**Without `--bzimage`** the suite's `linux-image-generic` is pulled by
+mmdebstrap, which lands as natural `linux-image-X.Y.Z` and
+`linux-modules-X.Y.Z` pancake layers (one per .deb).
+
+The bootstrap-side `--kernel` and the binary at `--bzimage` must obviously
+be the same kernel version, but the build tools don't enforce that — the
+user is responsible for `make modules_install` having matched the
+bzImage they're shipping.
 
 ### 2. Boot
 

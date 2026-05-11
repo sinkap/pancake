@@ -84,8 +84,17 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		"build the manifest-driven initramfs at this path; empty to skip")
 	kernel := fs.String("kernel", currentKVer(),
 		"kernel VERSION under /lib/modules/<VERSION> whose modules get baked "+
-			"into --initramfs (default: uname -r). The kernel BINARY "+
-			"(bzImage) is QEMU's -kernel arg at boot, not handled here.")
+			"into --initramfs (default: uname -r).")
+	bzimage := fs.String("bzimage", "",
+		"path to a custom-built bzImage; if set, pack it as a "+
+			"'pancake-kernel' verity layer (and modules from "+
+			"/lib/modules/<--kernel> as 'pancake-modules') instead of "+
+			"installing the suite's linux-image-generic. Use this when your "+
+			"kernel isn't in any apt repo (e.g. bpf-next/for-next).")
+	bzimageOut := fs.String("bzimage-out", "./pancake-bzImage",
+		"after building, drop the kernel bzImage at this path so the QEMU "+
+			"-kernel arg can point at it without extracting from the kit; "+
+			"empty to skip")
 
 	// bootstrap has no positional args; every flag carries a value, so the
 	// splitFlagsAndPositionals helper would incorrectly demote those values
@@ -113,6 +122,8 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		ImagePath:       *image,
 		InitramfsPath:   *initramfsPath,
 		Kernel:          *kernel,
+		BzImagePath:     *bzimage,
+		BzImageOutPath:  *bzimageOut,
 	}); err != nil {
 		return die(err)
 	}
@@ -145,10 +156,18 @@ type bootstrapArgs struct {
 	ImagePath                       string
 	InitramfsPath                   string
 	// Kernel is a VERSION string like "7.0.0-g9f5b3ffc3f1d" — the suffix
-	// of /lib/modules/<Kernel> on the build host. We bake those modules
-	// into the initramfs. The kernel BINARY (bzImage) is QEMU's -kernel
-	// arg at boot, not handled by pancake bootstrap.
+	// of /lib/modules/<Kernel> on the build host. Used both for the
+	// initramfs modules AND (when BzImagePath is set) for the
+	// pancake-modules layer's source.
 	Kernel string
+	// BzImagePath: path to a custom-built bzImage. If set, we pack it as
+	// a pancake-kernel verity layer + pancake-modules from /lib/modules/<Kernel>,
+	// and skip pulling linux-image-generic from the suite.
+	BzImagePath string
+	// BzImageOutPath: where to drop a copy of the bzImage for QEMU. The
+	// kit owns the canonical (verity-protected) copy; this is just a
+	// convenience handoff.
+	BzImageOutPath string
 }
 
 func bootstrap(a bootstrapArgs) error {
@@ -165,6 +184,13 @@ func bootstrap(a bootstrapArgs) error {
 	}
 
 	pkgList := dedup(append(append([]string{}, SystemBaseline...), a.Packages...))
+	if a.BzImagePath == "" {
+		// No custom bzImage → pull the suite's default kernel meta-package.
+		// On Debian/Ubuntu this in turn pulls linux-image-X.Y.Z and
+		// linux-modules-X.Y.Z as separate .debs, so they end up as two
+		// natural pancake layers via the per-package staging below.
+		pkgList = append(pkgList, "linux-image-generic")
+	}
 
 	fmt.Fprintf(os.Stderr, "\n[bootstrap] mmdebstrap → %s\n", sandboxDir)
 	if err := mmdebstrap(a.Suite, a.Mirror, pkgList, sandboxDir); err != nil {
@@ -189,7 +215,6 @@ func bootstrap(a bootstrapArgs) error {
 	}
 	defer os.RemoveAll(tmp)
 
-	type laidOut struct{ Name, Version, Arch, Dir string }
 	var layers []laidOut
 	ownedPaths := map[string]bool{}
 
@@ -289,17 +314,34 @@ func bootstrap(a bootstrapArgs) error {
 		layers = append(layers, laidOut{"pancake-state", "1.0.0", "all", "pancake-state"})
 	}
 
+	// Synthetic kernel layers (only when --bzimage was given; the suite
+	// kernel route already produces linux-image-* + linux-modules-* layers
+	// naturally via the per-package staging loop above).
+	if a.BzImagePath != "" {
+		var err error
+		layers, err = packCustomKernel(tmp, repo, layers, a)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Overlay order: leaves (most-specific) first, base last.
-	// pancake-state goes at the very top so its post-install bits win over
-	// anything a package might re-ship.
+	// pancake-state at the very top so its post-install bits win over
+	// anything a package might re-ship. The synthetic kernel + modules
+	// layers go just below — they own /boot/vmlinuz and
+	// /lib/modules/<ver> exclusively, so order is mostly cosmetic, but
+	// putting them near the top keeps related layers visually adjacent
+	// in `pancake list` output.
 	byName := map[string]laidOut{}
 	for _, L := range layers {
 		byName[L.Name] = L
 	}
 	depFirst := topologicalOrder(pkgs, sandboxDir)
 	var overlay []laidOut
-	if L, ok := byName["pancake-state"]; ok {
-		overlay = append(overlay, L)
+	for _, name := range []string{"pancake-state", "pancake-kernel", "pancake-modules"} {
+		if L, ok := byName[name]; ok {
+			overlay = append(overlay, L)
+		}
 	}
 	for i := len(depFirst) - 1; i >= 0; i-- {
 		if L, ok := byName[depFirst[i]]; ok {
@@ -326,6 +368,15 @@ func bootstrap(a bootstrapArgs) error {
 	}
 	if err := k.SetCurrent(1); err != nil {
 		return err
+	}
+
+	// bzImage hand-off for QEMU: do this BEFORE sandbox cleanup since the
+	// suite-kernel path reads /boot/vmlinuz-* out of the sandbox.
+	if a.BzImageOutPath != "" {
+		if err := exportBzImage(sandboxDir, a); err != nil {
+			return fmt.Errorf("bzimage-out: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "  → bzImage at %s\n", a.BzImageOutPath)
 	}
 
 	if !a.KeepSandbox {
@@ -437,3 +488,162 @@ func dedup(xs []string) []string {
 }
 
 // truncate, firstLine live in install.go (shared across cmd/pancake files).
+
+// laidOut is one row of the bootstrap layer ledger: a package (or
+// synthetic layer like pancake-state / pancake-kernel) with the slug
+// directory under repo/. Package-level so the synthetic-layer helpers
+// can return + extend it.
+type laidOut struct{ Name, Version, Arch, Dir string }
+
+// packCustomKernel synthesizes two pancake layers from a user-supplied
+// bzImage + the host's /lib/modules/<--kernel>/ tree. Used only when
+// --bzimage was given; the suite-kernel path makes both layers naturally
+// from linux-image-* and linux-modules-* .debs.
+//
+// pancake-kernel layer: just /boot/vmlinuz containing the bzImage.
+// pancake-modules layer: /lib/modules/<Kernel>/ from the host (recursive).
+func packCustomKernel(tmp, repo string, layers []laidOut, a bootstrapArgs) ([]laidOut, error) {
+	fmt.Fprintf(os.Stderr,
+		"\n[bootstrap] custom kernel: packing pancake-kernel + pancake-modules layers\n")
+
+	// pancake-kernel (the bzImage as /boot/vmlinuz)
+	{
+		staging := filepath.Join(tmp, "_pancake-kernel")
+		bootDir := filepath.Join(staging, "boot")
+		if err := os.MkdirAll(bootDir, 0o755); err != nil {
+			return layers, err
+		}
+		if err := copyFileLocal(a.BzImagePath,
+			filepath.Join(bootDir, "vmlinuz")); err != nil {
+			return layers, fmt.Errorf("copy bzImage: %w", err)
+		}
+		pkgDir := filepath.Join(repo, "pancake-kernel")
+		if _, err := os.Stat(pkgDir); err == nil {
+			_ = runner.Run(runner.Cmd{
+				Argv: []string{"rm", "-rf", pkgDir}, Sudo: true,
+			})
+		}
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			return layers, err
+		}
+		roothash, dataSize, err := layer.MakeVerity(staging,
+			filepath.Join(pkgDir, "image.img"), "pancake-kernel", 0)
+		if err != nil {
+			return layers, err
+		}
+		if err := kit.WritePackageManifest(pkgDir, kit.PackageManifest{
+			Package: kit.PackageBlock{
+				Name:    "pancake-kernel",
+				Version: a.Kernel,
+				Arch:    "all",
+				Description: fmt.Sprintf("custom kernel from %s",
+					filepath.Base(a.BzImagePath)),
+			},
+			Image: kit.ImageBlock{DataSize: dataSize, Roothash: roothash},
+		}); err != nil {
+			return layers, err
+		}
+		layers = append(layers, laidOut{"pancake-kernel", a.Kernel, "all", "pancake-kernel"})
+	}
+
+	// pancake-modules (/lib/modules/<Kernel>)
+	{
+		modSrc := filepath.Join("/lib/modules", a.Kernel)
+		if _, err := os.Stat(modSrc); err != nil {
+			return layers, fmt.Errorf("--bzimage given but %s missing — "+
+				"pass --kernel <ver> matching the bzImage and ensure "+
+				"`make modules_install` has been run", modSrc)
+		}
+		staging := filepath.Join(tmp, "_pancake-modules")
+		modDst := filepath.Join(staging, "lib/modules", a.Kernel)
+		if err := os.MkdirAll(modDst, 0o755); err != nil {
+			return layers, err
+		}
+		// cp -a preserves perms, symlinks, hard links — important for
+		// the kernel/<arch>/<subsys>/foo.ko tree which has thousands.
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"cp", "-a", modSrc + "/.", modDst + "/"},
+			Sudo: true,
+		}); err != nil {
+			return layers, err
+		}
+		pkgDir := filepath.Join(repo, "pancake-modules")
+		if _, err := os.Stat(pkgDir); err == nil {
+			_ = runner.Run(runner.Cmd{
+				Argv: []string{"rm", "-rf", pkgDir}, Sudo: true,
+			})
+		}
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			return layers, err
+		}
+		roothash, dataSize, err := layer.MakeVerity(staging,
+			filepath.Join(pkgDir, "image.img"), "pancake-modules", 0)
+		if err != nil {
+			return layers, err
+		}
+		if err := kit.WritePackageManifest(pkgDir, kit.PackageManifest{
+			Package: kit.PackageBlock{
+				Name:    "pancake-modules",
+				Version: a.Kernel,
+				Arch:    "all",
+				Description: fmt.Sprintf(
+					"kernel modules from /lib/modules/%s on build host",
+					a.Kernel),
+			},
+			Image: kit.ImageBlock{DataSize: dataSize, Roothash: roothash},
+		}); err != nil {
+			return layers, err
+		}
+		layers = append(layers, laidOut{"pancake-modules", a.Kernel, "all", "pancake-modules"})
+	}
+
+	return layers, nil
+}
+
+// exportBzImage drops a copy of the kernel binary at a.BzImageOutPath so
+// QEMU's `-kernel` arg can point at it without mounting the kit.
+//
+//   - If --bzimage was given: just copy that path to BzImageOutPath.
+//   - Else: find /boot/vmlinuz-* in the sandbox (placed there by
+//     linux-image-X.Y.Z's .deb extraction) and copy the newest one.
+func exportBzImage(sandbox string, a bootstrapArgs) error {
+	if a.BzImagePath != "" {
+		return copyFileLocal(a.BzImagePath, a.BzImageOutPath)
+	}
+	bootDir := filepath.Join(sandbox, "boot")
+	ents, err := os.ReadDir(bootDir)
+	if err != nil {
+		return fmt.Errorf("no /boot in sandbox (linux-image-generic "+
+			"didn't install?): %w", err)
+	}
+	var newest string
+	var newestMtime int64
+	for _, e := range ents {
+		if !strings.HasPrefix(e.Name(), "vmlinuz-") {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if fi.ModTime().Unix() > newestMtime {
+			newest = filepath.Join(bootDir, e.Name())
+			newestMtime = fi.ModTime().Unix()
+		}
+	}
+	if newest == "" {
+		return fmt.Errorf("no vmlinuz-* in %s", bootDir)
+	}
+	return copyFileLocal(newest, a.BzImageOutPath)
+}
+
+// copyFileLocal copies src→dst using `install` so we can stamp ownership
+// to the invoking user (unprivileged read access for QEMU).
+func copyFileLocal(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return runner.Run(runner.Cmd{
+		Argv: []string{"install", "-m", "0644", src, dst}, Sudo: true,
+	})
+}
