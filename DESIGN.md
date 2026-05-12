@@ -238,6 +238,16 @@ is also written by systemd-stub.
       check is still enforced).
 - [ ] LUKS2 encryption of the state partition with TPM-sealed key
       (Step 4 — needs `systemd-cryptenroll` with PCR 7 + 11 sealing)
+- [ ] Full reproducible-build pin for `pancake serve`'s auto-rebuild
+      path. Today `layer.MakeVerity` pins UUID + hash_seed + verity salt
+      + verity UUID + SOURCE_DATE_EPOCH (all derived from the layer
+      slug), but two builds of the same package on the same VM still
+      produce different verity roothashes — likely `metadata_csum_seed`
+      or directory-entry ordering noise. Until this is pinned the VM
+      will refuse most pushed manifests with new layers, falling back
+      to the "ship layers out-of-band" model. Tracking the exact
+      remaining sources of non-determinism in e2fsprogs is a task on
+      its own.
 - [ ] Auto-enroll dev cert into OVMF's `db` for one-command Secure Boot
       verification in QEMU (Step 5 — convenience; today it's a manual
       `ovmf-vars-generator` invocation)

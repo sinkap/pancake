@@ -277,7 +277,7 @@ func bootstrap(a bootstrapArgs) error {
 		}
 		roothash, dataSize, err := layer.MakeVerity(staging,
 			filepath.Join(pkgDir, "image.img"),
-			"pk-"+truncateStr(p.Name, 12), 0)
+			"pk-"+truncateStr(p.Name, 12), 0, dirName)
 		if err != nil {
 			return err
 		}
@@ -331,7 +331,8 @@ func bootstrap(a bootstrapArgs) error {
 			return err
 		}
 		roothash, dataSize, err := layer.MakeVerity(staging,
-			filepath.Join(pkgDir, "image.img"), "pancake-state", 0)
+			filepath.Join(pkgDir, "image.img"), "pancake-state", 0,
+			"pancake-state")
 		if err != nil {
 			return err
 		}
@@ -638,7 +639,8 @@ func packCustomKernel(tmp, repo string, layers []laidOut, a bootstrapArgs) ([]la
 			return layers, err
 		}
 		roothash, dataSize, err := layer.MakeVerity(staging,
-			filepath.Join(pkgDir, "image.img"), "pancake-kernel", 0)
+			filepath.Join(pkgDir, "image.img"), "pancake-kernel", 0,
+			"pancake-kernel-"+a.Kernel)
 		if err != nil {
 			return layers, err
 		}
@@ -688,7 +690,8 @@ func packCustomKernel(tmp, repo string, layers []laidOut, a bootstrapArgs) ([]la
 			return layers, err
 		}
 		roothash, dataSize, err := layer.MakeVerity(staging,
-			filepath.Join(pkgDir, "image.img"), "pancake-modules", 0)
+			filepath.Join(pkgDir, "image.img"), "pancake-modules", 0,
+			"pancake-modules-"+a.Kernel)
 		if err != nil {
 			return layers, err
 		}

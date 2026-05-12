@@ -159,8 +159,9 @@ func buildOne(debPath, lower, repo string) (string, error) {
 	}
 
 	imgPath := filepath.Join(outDir, "image.img")
+	slug := fmt.Sprintf("%s-%s", md.Package, deb.SlugifyVersion(md.Version))
 	roothash, dataSize, err := layer.MakeVerity(upper, imgPath,
-		"pk-"+truncateStr(md.Package, 12), 8)
+		"pk-"+truncateStr(md.Package, 12), 8, slug)
 	if err != nil {
 		return "", err
 	}

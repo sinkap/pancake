@@ -156,7 +156,7 @@ func cmdInstall(k *kit.Kit, args []string) int {
 		}
 		roothash, dataSize, err := layer.MakeVerity(staging,
 			filepath.Join(pkgDir, "image.img"),
-			"pk-"+truncateStr(p.Name, 12), 0)
+			"pk-"+truncateStr(p.Name, 12), 0, slug)
 		if err != nil {
 			return die(err)
 		}
