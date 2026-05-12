@@ -386,7 +386,7 @@ func bootstrap(a bootstrapArgs) error {
 	k := &kit.Kit{Dir: a.Output}
 	gm := kit.GenerationManifest{
 		Generation: kit.GenerationBlock{
-			ID: 1, Parent: 0,
+			ID: 1, Parent: 0, Counter: 1,
 			Description: fmt.Sprintf("initial generation (%d layers)", len(overlay)),
 		},
 	}

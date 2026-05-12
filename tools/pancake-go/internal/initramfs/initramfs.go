@@ -24,7 +24,9 @@ import (
 // Defaults match the shell version. Pulling util-linux + mount + cryptsetup-bin
 // + e2fsprogs gives us blkid, mount, veritysetup; udev/kmod give modprobe.
 // openssl is for `openssl dgst -verify` against the manifest signature
-// when a baked-in pubkey is present.
+// when a baked-in pubkey is present. tpm2-tools is for the rollback
+// counter check (tpm2_nvdefine, tpm2_nvread, tpm2_nvwrite); soft-fails
+// gracefully if no TPM is present.
 var DefaultPackages = []string{
 	"bash", "coreutils", "util-linux", "mount",
 	"cryptsetup-bin",
@@ -32,6 +34,8 @@ var DefaultPackages = []string{
 	"udev",
 	"e2fsprogs",
 	"openssl",
+	"tpm2-tools",
+	"xxd", // for hex<->binary conversion in the TPM-counter check
 }
 
 // Opts configures Build. SrcRoot must point at the fs-pancake source tree

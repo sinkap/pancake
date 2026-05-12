@@ -229,11 +229,23 @@ is also written by systemd-stub.
 - [x] `initramfs/init` (manifest-driven boot, signature verification)
 - [x] UEFI Secure Boot via signed UKI (Step 1 of TPM/signing story)
 - [x] Signed `generations/N/manifest.toml` + initramfs verification (Step 2)
-- [ ] TPM NV monotonic counter for rollback resistance (Step 3 — needs
-      `tpm2-tools` in initramfs and a `counter` field in the generation
-      manifest)
+- [x] TPM NV monotonic counter for rollback resistance (Step 3) —
+      `counter = N` field in `[generation]`, signed as part of
+      `manifest.toml`. Initramfs uses `tpm2_nvread` / `tpm2_nvwrite` on
+      NV index `0x01400001` (8-byte ordinary, no auth). Refuses to boot
+      if `manifest.counter < tpm.counter`; advances TPM to manifest
+      counter on success. Soft-fails if no TPM is present (signature
+      check is still enforced).
 - [ ] LUKS2 encryption of the state partition with TPM-sealed key
       (Step 4 — needs `systemd-cryptenroll` with PCR 7 + 11 sealing)
 - [ ] Auto-enroll dev cert into OVMF's `db` for one-command Secure Boot
       verification in QEMU (Step 5 — convenience; today it's a manual
       `ovmf-vars-generator` invocation)
+- [ ] `pancake install` should re-sign the new generation manifest
+      with the kit's signing key (today, in-VM-created generations are
+      unsigned and fail verification on reboot — the live-pivoted
+      running system trusts them transitively from its boot chain, but
+      a reboot reverts to the last bootstrap-time signed gen). Likely
+      requires the signing key to live alongside the kit on disk
+      (production model is "build new kit on the build host, ship it"
+      rather than in-VM mutation).

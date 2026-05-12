@@ -95,15 +95,66 @@ if [ -r "$PUBKEY" ]; then
         exec /bin/sh
     fi
     echo "[init] manifest signature OK"
-    # Best-effort: extend PCR 13 with the manifest hash so attestation /
-    # cryptenroll policies can bind to which generation booted. We do
-    # this only if tpm2_pcrextend is available (it isn't in the default
-    # initramfs deps yet — pulling tpm2-tools would be a follow-up).
-    if command -v tpm2_pcrextend >/dev/null 2>&1; then
+
+    # Rollback resistance via TPM NV index. The manifest contains a
+    # monotonic `counter = N` line. We compare against an NV index value
+    # that only ever moves forward across boots; refuse to boot if the
+    # signed manifest is OLDER than what the TPM has already seen.
+    #
+    # Soft-fails on no-TPM systems so the kit still boots (the signature
+    # check above is the integrity floor; rollback resistance is the
+    # additional layer this provides when a TPM is present).
+    counter=$(sed -n 's/^counter[[:space:]]*=[[:space:]]*\([0-9]\+\).*/\1/p' "$MANIFEST" | head -1)
+    if [ -z "$counter" ]; then
+        echo "[init] WARNING: manifest has no counter field; skipping TPM rollback check"
+    elif [ ! -e /dev/tpmrm0 ] && [ ! -e /dev/tpm0 ]; then
+        echo "[init] no TPM present, skipping rollback check (manifest counter=$counter)"
+    else
+        NV=0x01400001
+        # Try reading the NV index first. If it doesn't exist yet (fresh
+        # TPM / first boot), define it and zero-init. 8-byte ordinary,
+        # no auth (live root is the only writer; offline-disk attackers
+        # can't reach the TPM).
+        if ! tpm2_nvread "$NV" >/dev/null 2>&1; then
+            echo "[init] first boot: defining TPM NV $NV (rollback counter)"
+            if tpm2_nvdefine "$NV" -C o -s 8 -a "authread|authwrite" 2>/dev/null; then
+                printf '\0\0\0\0\0\0\0\0' > /tmp/pancake-zero.bin
+                tpm2_nvwrite "$NV" -i /tmp/pancake-zero.bin 2>/dev/null
+                rm -f /tmp/pancake-zero.bin
+            else
+                echo "[init] WARNING: tpm2_nvdefine failed, skipping rollback check"
+                NO_TPM=1
+            fi
+        fi
+        if [ -z "$NO_TPM" ]; then
+            tpm_hex=$(tpm2_nvread "$NV" 2>/dev/null | xxd -p | tr -d '\n')
+            tpm_counter=$((16#${tpm_hex:-0}))
+            if [ "$counter" -lt "$tpm_counter" ]; then
+                echo "[init] FATAL: rollback attempt — manifest counter $counter < TPM counter $tpm_counter"
+                echo "[init]        someone replaced current/manifest.toml with an older signed copy."
+                exec /bin/sh
+            fi
+            if [ "$counter" -gt "$tpm_counter" ]; then
+                echo "[init] advancing TPM counter $tpm_counter → $counter"
+                printf '%016x' "$counter" | xxd -r -p > /tmp/pancake-counter.bin
+                if ! tpm2_nvwrite "$NV" -i /tmp/pancake-counter.bin 2>/tmp/pancake-nvwrite.err; then
+                    echo "[init] WARNING: tpm2_nvwrite failed:"
+                    cat /tmp/pancake-nvwrite.err
+                fi
+                rm -f /tmp/pancake-counter.bin /tmp/pancake-nvwrite.err
+            else
+                echo "[init] TPM counter matches manifest ($counter)"
+            fi
+        fi
+    fi
+
+    # Best-effort PCR 13 extend so attestation / future cryptenroll
+    # policies can bind to which generation booted.
+    if command -v tpm2_pcrextend >/dev/null 2>&1 && [ -e /dev/tpmrm0 -o -e /dev/tpm0 ]; then
         h=$(sha256sum "$MANIFEST" | awk '{print $1}')
         tpm2_pcrextend "13:sha256=$h" >/dev/null 2>&1 \
-            && echo "[init] PCR 13 extended with manifest hash $h" \
-            || echo "[init] WARNING: tpm2_pcrextend failed (no TPM?)"
+            && echo "[init] PCR 13 extended with manifest hash ${h:0:16}…" \
+            || true
     fi
 else
     echo "[init] no /etc/pancake/manifest.pubkey baked in — skipping manifest verification"

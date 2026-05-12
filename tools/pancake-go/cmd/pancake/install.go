@@ -186,6 +186,12 @@ func cmdInstall(k *kit.Kit, args []string) int {
 		return die(err)
 	}
 	newID := latest + 1
+	// Counter must monotonically increase across kit history so the
+	// initramfs's TPM-NV-counter check rejects rollback attempts.
+	maxCtr, err := k.MaxCounter()
+	if err != nil {
+		return die(err)
+	}
 	allLayers := make([]kit.LayerRef, 0, len(newLayers)+len(curMan.Layer))
 	for _, L := range newLayers {
 		allLayers = append(allLayers, kit.LayerRef{
@@ -196,7 +202,7 @@ func cmdInstall(k *kit.Kit, args []string) int {
 	allLayers = append(allLayers, curMan.Layer...)
 	if err := kit.WriteGenerationManifest(k, kit.GenerationManifest{
 		Generation: kit.GenerationBlock{
-			ID: newID, Parent: curID,
+			ID: newID, Parent: curID, Counter: maxCtr + 1,
 			Description: fmt.Sprintf("install %s (%d new layers)",
 				csv(packages), len(newLayers)),
 		},

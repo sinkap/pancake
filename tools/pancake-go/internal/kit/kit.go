@@ -175,6 +175,13 @@ type GenerationBlock struct {
 	Parent      int    `toml:"parent"`
 	Created     string `toml:"created"`
 	Description string `toml:"description"`
+	// Counter is a monotonically-increasing integer signed into the
+	// manifest. The initramfs compares it against a TPM NV index and
+	// refuses to boot if the manifest's counter is *less* than what
+	// the TPM has already seen — this is what defeats the "replace
+	// current with an older signed manifest" rollback attack. New
+	// generations get current_max + 1; gen 1 starts at 1.
+	Counter int `toml:"counter"`
 }
 
 // LayerRef points at one repo/<slug>/manifest.toml. Name+Version are kept
@@ -206,6 +213,7 @@ func WriteGenerationManifest(k *Kit, gen GenerationManifest) error {
 	w("[generation]")
 	w(fmt.Sprintf("id          = %d", gen.Generation.ID))
 	w(fmt.Sprintf("parent      = %d", gen.Generation.Parent))
+	w(fmt.Sprintf("counter     = %d", gen.Generation.Counter))
 	w(fmt.Sprintf("created     = %q", gen.Generation.Created))
 	w(fmt.Sprintf("description = %q", gen.Generation.Description))
 	w("")
@@ -339,6 +347,30 @@ func (k *Kit) SetCurrent(id int) error {
 		return err
 	}
 	return os.Rename(tmp, k.Current())
+}
+
+// MaxCounter returns the largest `counter` field across every existing
+// generation manifest in the kit. New generations should be created with
+// MaxCounter()+1 so the value is monotonic across kit history. Returns 0
+// (and no error) if no generations exist yet.
+func (k *Kit) MaxCounter() (int, error) {
+	ids, err := k.SortGenerations()
+	if err != nil {
+		return 0, err
+	}
+	max := 0
+	for _, id := range ids {
+		path := filepath.Join(k.Generations(),
+			strconv.Itoa(id), "manifest.toml")
+		m, err := ReadGenerationManifest(path)
+		if err != nil {
+			continue
+		}
+		if m.Generation.Counter > max {
+			max = m.Generation.Counter
+		}
+	}
+	return max, nil
 }
 
 // SortGenerations returns IDs in ascending numeric order.
