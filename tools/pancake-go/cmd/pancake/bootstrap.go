@@ -58,6 +58,11 @@ var SystemBaseline = []string{
 	"openssh-client",
 	"less", "procps",
 	"apt", // pancake install needs apt inside the materialized chroot
+	// libtss2-* are dlopen'd by systemd-creds for TPM2 sealing. Without
+	// them `pancake enroll` (and any systemd-creds --tpm2-* op) reports
+	// `-libraries` and refuses. tpm2-tools also gives `tpm2_*` CLIs in
+	// the booted system for debugging.
+	"tpm2-tools",
 }
 
 // cmdBootstrap is the `pancake bootstrap` subcommand.

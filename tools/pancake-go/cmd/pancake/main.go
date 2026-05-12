@@ -36,6 +36,10 @@ modify (in-VM only — operate on the running pancake-os):
   swap [<id>]         live pivot_root onto a generation, no reboot
   serve               in-VM gRPC server: GetCurrentManifest + Update
                       (orchestrator pushes signed manifests here)
+  enroll              seal a fresh orchestrator-update bearer token to
+                      this VM's boot chain via TPM PCR 7+11. Subsequent
+                      'pancake serve' requires a matching boot chain to
+                      decrypt and accept updates.
 
 orchestrator (build/admin host):
   orchestrate get-current  ask a VM what manifest it's running
@@ -103,6 +107,8 @@ func main() {
 		rc = cmdBootstrap(k, args)
 	case "serve":
 		rc = cmdServe(k, args)
+	case "enroll":
+		rc = cmdEnroll(k, args)
 	case "orchestrate":
 		rc = cmdOrchestrate(k, args)
 	default:

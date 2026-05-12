@@ -236,8 +236,19 @@ is also written by systemd-stub.
       if `manifest.counter < tpm.counter`; advances TPM to manifest
       counter on success. Soft-fails if no TPM is present (signature
       check is still enforced).
+- [x] TPM-sealed orchestrator-update auth token (Step 4) —
+      `pancake enroll` generates a random 256-bit bearer token and
+      seals it via `systemd-creds encrypt --tpm2-pcrs=7+11` to
+      `/etc/pancake/orch-token.creds`. `pancake serve --tpm-token`
+      decrypts at startup; PCR mismatch (kernel/initrd swap → different
+      PCR 11) → `Operation not permitted` → server refuses to start.
+      Effectively quarantines a tampered fleet member from accepting
+      pushes. Re-enrollment is required after any boot-chain change
+      (deliberate; bind-to-current-state is the whole point).
 - [ ] LUKS2 encryption of the state partition with TPM-sealed key
-      (Step 4 — needs `systemd-cryptenroll` with PCR 7 + 11 sealing)
+      (Step 5, deferred — kit is mostly public-FOSS so confidentiality
+      isn't the most valuable next thing; integrity gates are already
+      in place).
 - [ ] Full reproducible-build pin for `pancake serve`'s auto-rebuild
       path. Today `layer.MakeVerity` pins UUID + hash_seed + verity salt
       + verity UUID + SOURCE_DATE_EPOCH (all derived from the layer

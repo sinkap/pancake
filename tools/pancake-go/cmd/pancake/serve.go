@@ -51,8 +51,17 @@ func cmdServe(k *kit.Kit, args []string) int {
 	tokenFile := fs.String("token-file", "",
 		"file containing a bearer token; clients must send it as "+
 			"metadata['authorization'] = \"Bearer <token>\". Empty disables auth.")
+	tpmToken := fs.String("tpm-token", "",
+		"path to a systemd-creds-sealed token blob (typically "+
+			defaultSealedTokenPath+", produced by `pancake enroll`). "+
+			"Decrypts at startup via TPM PCR 7+11; mismatched boot chain "+
+			"→ decrypt fails → server refuses to start. Mutually "+
+			"exclusive with --token-file.")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *tokenFile != "" && *tpmToken != "" {
+		return die(fmt.Errorf("--token-file and --tpm-token are mutually exclusive"))
 	}
 	if _, err := os.Stat(*pubkey); err != nil {
 		fmt.Fprintf(os.Stderr,
@@ -67,6 +76,16 @@ func cmdServe(k *kit.Kit, args []string) int {
 			return die(fmt.Errorf("read token-file: %w", err))
 		}
 		srv.token = strings.TrimSpace(string(b))
+	} else if *tpmToken != "" {
+		t, err := loadSealedToken(*tpmToken)
+		if err != nil {
+			return die(fmt.Errorf("unseal --tpm-token: %w "+
+				"(boot chain doesn't match what was sealed at enroll? "+
+				"re-run `pancake enroll`)", err))
+		}
+		srv.token = t
+		fmt.Fprintln(os.Stderr,
+			"[serve] auth token unsealed from TPM (PCR-bound to current boot chain)")
 	}
 
 	lis, err := net.Listen("tcp", *listen)

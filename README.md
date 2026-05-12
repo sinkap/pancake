@@ -109,6 +109,34 @@ sudo tools/pancake-go/bin/pancake bootstrap \
 
 Pass an empty string to skip any one step (e.g. `--image=""`).
 
+### TPM-sealed serve auth (PCR 7 + 11)
+
+By default `pancake serve` is unauthenticated (signature on the manifest
+is the integrity floor). For real fleets, bind serve's bearer-token
+auth to the boot chain so a tampered VM can't accept updates:
+
+```sh
+# in-VM, after the kit is up and the TPM is initialised
+pancake enroll                              # → prints bearer token "abc123…"
+                                            #   sealed blob at /etc/pancake/orch-token.creds
+
+pancake serve --tpm-token /etc/pancake/orch-token.creds
+# → [serve] auth token unsealed from TPM (PCR-bound to current boot chain)
+```
+
+Subsequent boots into the same kernel/initrd unseal cleanly. If the
+boot chain changes (kernel update, initrd swap), PCR 11 differs, the
+TPM refuses to release the token, serve fails to start. Re-enroll
+after any deliberate boot-chain change.
+
+The orchestrator side is unchanged — operator passes the plaintext
+token via `--token-file`:
+
+```sh
+pancake orchestrate push --target VM:7878 --kit ./kit --gen-id N \
+    --token-file ~/secrets/vm-orch-token
+```
+
 ### Push updates: orchestrator → VM via gRPC
 
 `pancake serve` runs inside the VM and exposes a tiny gRPC service
