@@ -120,6 +120,11 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			"signature against this cert (must be enrolled in db). The "+
 			"public key is also extracted and baked into the initramfs at "+
 			"/etc/pancake/manifest.pubkey for manifest verification at boot.")
+	pancakedBin := fs.String("pancaked-bin", "",
+		"path to the pancaked binary to bake as a separate verity layer. "+
+			"Default: sibling of --pancake-bin / this executable. The layer "+
+			"includes /usr/sbin/pancaked + the systemd unit so the daemon "+
+			"auto-starts at boot.")
 
 	// bootstrap has no positional args; every flag carries a value, so the
 	// splitFlagsAndPositionals helper would incorrectly demote those values
@@ -153,6 +158,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		Cmdline:         *cmdline,
 		SignKey:         *signKey,
 		SignCert:        *signCert,
+		PancakedBin:     *pancakedBin,
 	}); err != nil {
 		return die(err)
 	}
@@ -206,6 +212,10 @@ type bootstrapArgs struct {
 	// and the generation manifest, and bake the cert's public key into
 	// the initramfs so /init can verify the manifest before mounting.
 	SignKey, SignCert string
+	// PancakedBin: path to the pancaked daemon binary. If empty, defaults
+	// to a sibling of PancakeBin (or this executable). Goes into its own
+	// "pancaked" verity layer alongside the systemd unit.
+	PancakedBin string
 }
 
 func bootstrap(a bootstrapArgs) error {
@@ -364,6 +374,19 @@ func bootstrap(a bootstrapArgs) error {
 		}
 	}
 
+	// Synthetic pancaked layer: contains /usr/sbin/pancaked + the systemd
+	// unit so the daemon auto-starts at boot. Lives in its own verity
+	// layer so it's independently updatable via push (separate from
+	// pancake-state, which holds postinst orphans, and separate from
+	// /usr/local/bin/pancake which is in pancake-state today).
+	{
+		var err error
+		layers, err = packPancakedLayer(tmp, repo, layers, a)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Overlay order: leaves (most-specific) first, base last.
 	// pancake-state at the very top so its post-install bits win over
 	// anything a package might re-ship. The synthetic kernel + modules
@@ -377,7 +400,10 @@ func bootstrap(a bootstrapArgs) error {
 	}
 	depFirst := topologicalOrder(pkgs, sandboxDir)
 	var overlay []laidOut
-	for _, name := range []string{"pancake-state", "pancake-kernel", "pancake-modules"} {
+	for _, name := range []string{
+		"pancake-state", "pancaked",
+		"pancake-kernel", "pancake-modules",
+	} {
 		if L, ok := byName[name]; ok {
 			overlay = append(overlay, L)
 		}
@@ -611,6 +637,126 @@ func dedup(xs []string) []string {
 // directory under repo/. Package-level so the synthetic-layer helpers
 // can return + extend it.
 type laidOut struct{ Name, Version, Arch, Dir string }
+
+// packPancakedLayer synthesizes the "pancaked" verity layer: contains
+// the daemon binary at /usr/sbin/pancaked plus a systemd unit that auto-
+// starts it at boot. Lives in its own layer so the daemon is updatable
+// independently of pancake-state and the rest of the kit.
+//
+// Where the binary comes from:
+//   - --pancaked-bin if explicitly set
+//   - else: sibling of --pancake-bin (or os.Executable() if the bootstrap
+//     binary is `pancake` and pancaked is in the same dir, the typical
+//     `go build -o ./bin/ ./cmd/...` layout)
+//   - else: error with a clear message
+//
+// The systemd unit:
+//   - Description, Documentation
+//   - After=network-online.target, pancake-state-rw.service
+//   - ExecStart=/usr/sbin/pancaked --tpm-token=auto (uses the sealed
+//     token at /etc/pancake/orch-token.creds if `pancake enroll` has
+//     been run; fails clearly otherwise)
+//   - Restart=on-failure RestartSec=5
+//   - WantedBy=multi-user.target (with the symlink already created in
+//     the layer for first-boot enable)
+func packPancakedLayer(tmp, repo string, layers []laidOut, a bootstrapArgs) ([]laidOut, error) {
+	bin := a.PancakedBin
+	if bin == "" {
+		// Try sibling of --pancake-bin or the running executable.
+		base := a.PancakeBin
+		if base == "" {
+			exe, err := os.Executable()
+			if err != nil {
+				return layers, fmt.Errorf("locate self for --pancaked-bin: %w", err)
+			}
+			base = exe
+		}
+		candidate := filepath.Join(filepath.Dir(base), "pancaked")
+		if _, err := os.Stat(candidate); err != nil {
+			return layers, fmt.Errorf(
+				"--pancaked-bin not given and no sibling 'pancaked' next to %s "+
+					"(build with: go build -o ./bin/ ./cmd/...)", base)
+		}
+		bin = candidate
+	}
+	if _, err := os.Stat(bin); err != nil {
+		return layers, fmt.Errorf("--pancaked-bin: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr,
+		"\n[bootstrap] packing pancaked layer (binary: %s)\n", bin)
+
+	staging := filepath.Join(tmp, "_pancaked")
+	sbinDir := filepath.Join(staging, "usr/sbin")
+	unitDir := filepath.Join(staging, "etc/systemd/system")
+	wantsDir := filepath.Join(unitDir, "multi-user.target.wants")
+	for _, d := range []string{sbinDir, unitDir, wantsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return layers, err
+		}
+	}
+	if err := copyFileLocal(bin, filepath.Join(sbinDir, "pancaked")); err != nil {
+		return layers, err
+	}
+	if err := os.Chmod(filepath.Join(sbinDir, "pancaked"), 0o755); err != nil {
+		return layers, err
+	}
+
+	const unit = `[Unit]
+Description=pancake update daemon (orchestrator gRPC receiver)
+Documentation=https://github.com/sinkap/fs-pancake
+After=pancake-state-rw.service
+Requires=pancake-state-rw.service
+
+[Service]
+ExecStart=/usr/sbin/pancaked --tpm-token=auto
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+`
+	if err := os.WriteFile(
+		filepath.Join(unitDir, "pancaked.service"),
+		[]byte(unit), 0o644); err != nil {
+		return layers, err
+	}
+	// Pre-enable: the multi-user.target.wants symlink, so first boot
+	// after install brings the unit up without `systemctl enable`.
+	if err := os.Symlink(
+		"/etc/systemd/system/pancaked.service",
+		filepath.Join(wantsDir, "pancaked.service")); err != nil {
+		return layers, err
+	}
+
+	pkgDir := filepath.Join(repo, "pancaked")
+	if _, err := os.Stat(pkgDir); err == nil {
+		_ = runner.Run(runner.Cmd{
+			Argv: []string{"rm", "-rf", pkgDir}, Sudo: true,
+		})
+	}
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		return layers, err
+	}
+	roothash, dataSize, err := layer.MakeVerity(staging,
+		filepath.Join(pkgDir, "image.img"), "pancaked", 0, "pancaked")
+	if err != nil {
+		return layers, err
+	}
+	if err := kit.WritePackageManifest(pkgDir, kit.PackageManifest{
+		Package: kit.PackageBlock{
+			Name: "pancaked", Version: "1.0.0", Arch: "all",
+			Description: "pancake update daemon — gRPC receiver for orchestrator pushes",
+		},
+		Image: kit.ImageBlock{DataSize: dataSize, Roothash: roothash},
+	}); err != nil {
+		return layers, err
+	}
+	layers = append(layers, laidOut{"pancaked", "1.0.0", "all", "pancaked"})
+	return layers, nil
+}
 
 // packCustomKernel synthesizes two pancake layers from a user-supplied
 // bzImage + the host's /lib/modules/<--kernel>/ tree. Used only when

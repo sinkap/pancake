@@ -1,19 +1,15 @@
-// `pancake serve`: gRPC service running on the VM. Implements the
-// pancake.v1.Pancake service from internal/orchpb/pancake.proto.
+// Package orchsrv implements pancake's orchestrator-side gRPC service:
+// GetCurrentManifest + Update from internal/orchpb/pancake.proto.
 //
-// Two RPCs, no streaming, no transport bundle: the manifest IS the wire
-// format. See internal/orchpb/pancake.proto for the contract.
-//
-// Auth: optional bearer token in metadata['authorization'] = "Bearer T".
-// The signature on the manifest is the integrity floor; the token only
-// thwarts trivial DoS.
-
-package main
+// Used by the pancaked daemon (cmd/pancaked) and previously by the now-
+// removed `pancake serve` subcommand. Server logic, auto-rebuild path,
+// and TPM-sealed-token loading all live here so cmd/pancaked stays a
+// thin entry point.
+package orchsrv
 
 import (
 	"context"
 	"crypto/subtle"
-	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -34,80 +30,85 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const defaultPubKeyPath = "/etc/pancake/manifest.pubkey"
+// DefaultPubKeyPath is where pancake bootstrap bakes the manifest pubkey
+// into pancake-state, and where pancaked looks for it by default.
+const DefaultPubKeyPath = "/etc/pancake/manifest.pubkey"
 
-type pancakeServer struct {
+// DefaultSealedTokenPath is where pancake enroll writes the systemd-creds
+// blob, and where pancaked looks for it by default if --tpm-token is
+// passed without a value.
+const DefaultSealedTokenPath = "/etc/pancake/orch-token.creds"
+
+// Opts is what cmd/pancaked passes to Serve. Keep small + boring; flag
+// parsing lives in main.
+type Opts struct {
+	Kit          *kit.Kit
+	Listen       string // address:port for gRPC listener
+	PubKey       string // PEM PKIX public key path
+	TokenFile    string // plaintext bearer token file (optional)
+	TPMTokenFile string // systemd-creds-sealed token file (optional, mutually
+	// exclusive with TokenFile)
+}
+
+// Serve starts the gRPC server. Blocks until the listener errors.
+// Returns nil on graceful shutdown, an error otherwise.
+func Serve(o Opts) error {
+	if o.Listen == "" {
+		o.Listen = ":7878"
+	}
+	if o.PubKey == "" {
+		o.PubKey = DefaultPubKeyPath
+	}
+	if o.TokenFile != "" && o.TPMTokenFile != "" {
+		return fmt.Errorf("orchsrv: TokenFile and TPMTokenFile are mutually exclusive")
+	}
+	if _, err := os.Stat(o.PubKey); err != nil {
+		return fmt.Errorf("pubkey not found at %s — was the kit "+
+			"bootstrapped without --sign-key?", o.PubKey)
+	}
+
+	srv := &server{k: o.Kit, pubkey: o.PubKey}
+	switch {
+	case o.TokenFile != "":
+		b, err := os.ReadFile(o.TokenFile)
+		if err != nil {
+			return fmt.Errorf("read token-file: %w", err)
+		}
+		srv.token = strings.TrimSpace(string(b))
+	case o.TPMTokenFile != "":
+		t, err := LoadSealedToken(o.TPMTokenFile)
+		if err != nil {
+			return fmt.Errorf("unseal token: %w "+
+				"(boot chain mismatch? re-run `pancake enroll`)", err)
+		}
+		srv.token = t
+		fmt.Fprintln(os.Stderr,
+			"[pancaked] auth token unsealed from TPM (PCR-bound to current boot chain)")
+	}
+
+	lis, err := net.Listen("tcp", o.Listen)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", o.Listen, err)
+	}
+	g := grpc.NewServer(grpc.UnaryInterceptor(srv.authInterceptor))
+	orchpb.RegisterPancakeServer(g, srv)
+
+	fmt.Fprintf(os.Stderr,
+		"[pancaked] gRPC listening on %s (auth=%t)\n",
+		o.Listen, srv.token != "")
+	return g.Serve(lis)
+}
+
+// server is the orchpb.PancakeServer implementation.
+type server struct {
 	orchpb.UnimplementedPancakeServer
 	k      *kit.Kit
 	pubkey string
 	token  string // empty = no auth
 }
 
-func cmdServe(k *kit.Kit, args []string) int {
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	listen := fs.String("listen", ":7878", "address:port for gRPC listener")
-	pubkey := fs.String("pubkey", defaultPubKeyPath,
-		"PEM PKIX public key for verifying pushed manifests")
-	tokenFile := fs.String("token-file", "",
-		"file containing a bearer token; clients must send it as "+
-			"metadata['authorization'] = \"Bearer <token>\". Empty disables auth.")
-	tpmToken := fs.String("tpm-token", "",
-		"path to a systemd-creds-sealed token blob (typically "+
-			defaultSealedTokenPath+", produced by `pancake enroll`). "+
-			"Decrypts at startup via TPM PCR 7+11; mismatched boot chain "+
-			"→ decrypt fails → server refuses to start. Mutually "+
-			"exclusive with --token-file.")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	if *tokenFile != "" && *tpmToken != "" {
-		return die(fmt.Errorf("--token-file and --tpm-token are mutually exclusive"))
-	}
-	if _, err := os.Stat(*pubkey); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"pancake serve: pubkey not found at %s — was the kit "+
-				"bootstrapped without --sign-key?\n", *pubkey)
-		return 1
-	}
-	srv := &pancakeServer{k: k, pubkey: *pubkey}
-	if *tokenFile != "" {
-		b, err := os.ReadFile(*tokenFile)
-		if err != nil {
-			return die(fmt.Errorf("read token-file: %w", err))
-		}
-		srv.token = strings.TrimSpace(string(b))
-	} else if *tpmToken != "" {
-		t, err := loadSealedToken(*tpmToken)
-		if err != nil {
-			return die(fmt.Errorf("unseal --tpm-token: %w "+
-				"(boot chain doesn't match what was sealed at enroll? "+
-				"re-run `pancake enroll`)", err))
-		}
-		srv.token = t
-		fmt.Fprintln(os.Stderr,
-			"[serve] auth token unsealed from TPM (PCR-bound to current boot chain)")
-	}
-
-	lis, err := net.Listen("tcp", *listen)
-	if err != nil {
-		return die(fmt.Errorf("listen: %w", err))
-	}
-	g := grpc.NewServer(grpc.UnaryInterceptor(srv.authInterceptor))
-	orchpb.RegisterPancakeServer(g, srv)
-
-	fmt.Fprintf(os.Stderr,
-		"[serve] gRPC listening on %s (auth=%t)\n",
-		*listen, srv.token != "")
-	if err := g.Serve(lis); err != nil {
-		return die(err)
-	}
-	return 0
-}
-
-// authInterceptor checks the bearer token on every RPC if one is set.
-func (s *pancakeServer) authInterceptor(ctx context.Context,
-	req any, info *grpc.UnaryServerInfo,
-	handler grpc.UnaryHandler) (any, error) {
+func (s *server) authInterceptor(ctx context.Context, req any,
+	_ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 	if s.token == "" {
 		return handler(ctx, req)
 	}
@@ -123,7 +124,7 @@ func (s *pancakeServer) authInterceptor(ctx context.Context,
 }
 
 // GetCurrentManifest returns whatever generation `current` points at.
-func (s *pancakeServer) GetCurrentManifest(ctx context.Context,
+func (s *server) GetCurrentManifest(_ context.Context,
 	_ *orchpb.GetCurrentManifestRequest) (*orchpb.Manifest, error) {
 	curID, err := s.k.CurrentID()
 	if err != nil {
@@ -134,7 +135,7 @@ func (s *pancakeServer) GetCurrentManifest(ctx context.Context,
 
 // Update accepts a signed manifest, verifies it end-to-end, writes the
 // generation directory atomically. Does NOT flip current.
-func (s *pancakeServer) Update(ctx context.Context,
+func (s *server) Update(_ context.Context,
 	m *orchpb.Manifest) (*orchpb.UpdateResponse, error) {
 	if len(m.ManifestToml) == 0 || len(m.ManifestSig) == 0 {
 		return nil, status.Error(codes.InvalidArgument,
@@ -190,11 +191,7 @@ func (s *pancakeServer) Update(ctx context.Context,
 			status.Error(codes.AlreadyExists, msg)
 	}
 
-	// 3. Layer-presence check. Every referenced slug MUST already be in
-	// kit/repo/, but if any are missing we attempt to rebuild them
-	// locally from apt — manifest already names (package, version), and
-	// with deterministic mkfs.ext4 + veritysetup salt the roothash
-	// matches the build host's. (See layer.MakeVerity's seed parameter.)
+	// 3. Layer-presence check + auto-rebuild from apt for missing slugs.
 	missingSlugs := []string{}
 	missingLayers := []kit.LayerRef{}
 	for _, L := range gm.Layer {
@@ -206,7 +203,7 @@ func (s *pancakeServer) Update(ctx context.Context,
 	}
 	if len(missingSlugs) > 0 {
 		fmt.Fprintf(os.Stderr,
-			"[serve] %d missing layers; attempting local rebuild from apt\n",
+			"[pancaked] %d missing layers; attempting local rebuild from apt\n",
 			len(missingSlugs))
 		expected, err := parseLowersRoothashes(m.Lowers)
 		if err != nil {
@@ -220,7 +217,6 @@ func (s *pancakeServer) Update(ctx context.Context,
 					Error:             "auto-build: " + err.Error()},
 				status.Error(codes.FailedPrecondition, err.Error())
 		}
-		// Re-verify presence; anything still missing is fatal.
 		var stillMissing []string
 		for _, slug := range missingSlugs {
 			if _, err := os.Stat(filepath.Join(s.k.Repo(), slug, "image.img")); err != nil {
@@ -234,11 +230,11 @@ func (s *pancakeServer) Update(ctx context.Context,
 				status.Error(codes.Internal, "still missing")
 		}
 		fmt.Fprintf(os.Stderr,
-			"[serve] all %d missing layers rebuilt locally with matching roothashes\n",
+			"[pancaked] all %d missing layers rebuilt locally with matching roothashes\n",
 			len(missingSlugs))
 	}
 
-	// 4. Atomic install.
+	// 4. Atomic install of the gen dir.
 	dst := filepath.Join(s.k.Generations(), strconv.Itoa(newID))
 	tmp := dst + ".tmp"
 	_ = os.RemoveAll(tmp)
@@ -263,14 +259,33 @@ func (s *pancakeServer) Update(ctx context.Context,
 	}
 
 	fmt.Fprintf(os.Stderr,
-		"[serve] installed generation %d (counter %d, %d layers)\n",
+		"[pancaked] installed generation %d (counter %d, %d layers)\n",
 		newID, gm.Generation.Counter, len(gm.Layer))
 	return &orchpb.UpdateResponse{InstalledGeneration: int32(newID)}, nil
 }
 
+// readManifestFromKit reads the three sidecar files for genID into a
+// proto Manifest. Used by GetCurrentManifest.
+func readManifestFromKit(k *kit.Kit, genID int) (*orchpb.Manifest, error) {
+	dir := filepath.Join(k.Generations(), strconv.Itoa(genID))
+	mt, err := os.ReadFile(filepath.Join(dir, "manifest.toml"))
+	if err != nil {
+		return nil, status.Error(codes.NotFound, err.Error())
+	}
+	ms, err := os.ReadFile(filepath.Join(dir, "manifest.toml.sig"))
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition,
+			"manifest.toml.sig missing — kit was built without --sign-key")
+	}
+	lo, err := os.ReadFile(filepath.Join(dir, "lowers"))
+	if err != nil {
+		return nil, status.Error(codes.NotFound, err.Error())
+	}
+	return &orchpb.Manifest{ManifestToml: mt, ManifestSig: ms, Lowers: lo}, nil
+}
+
 // parseLowersRoothashes parses a lowers TSV (slug<TAB>image<TAB>hash<TAB>roothash)
-// into slug → expected roothash. Used to verify that layers we rebuild
-// locally produce the same verity tree the build host did.
+// into slug → expected roothash.
 func parseLowersRoothashes(lowers []byte) (map[string]string, error) {
 	out := map[string]string{}
 	for _, line := range strings.Split(string(lowers), "\n") {
@@ -293,24 +308,9 @@ func parseLowersRoothashes(lowers []byte) (map[string]string, error) {
 // runs `apt-get install <name>=<version> ...` for every missing layer,
 // snapshots each newly-installed package as a verity layer with the
 // deterministic-seed flags from layer.MakeVerity, and verifies the
-// resulting roothash matches the orchestrator-claimed value (from the
-// pushed lowers TSV). All-or-nothing: a single roothash mismatch (or
-// any apt failure) leaves repo/ untouched and returns an error.
-//
-// Reproducibility caveats: this works ONLY when the local build
-// produces byte-identical layer files to what the build host produced.
-// Two factors:
-//
-//   - mkfs.ext4 determinism: handled by layer.MakeVerity's seed param
-//     (-U + -E hash_seed= + veritysetup --uuid + --salt all derived
-//     from the slug).
-//   - Source content determinism: dpkg unpacking the same .deb on the
-//     same arch yields the same file tree. Stage_files preserves mtimes
-//     via tar -p (default behavior).
-//
-// If a roothash mismatch happens despite both, that points at a
-// non-deterministic mkfs.ext4 detail we haven't pinned yet — fix
-// upstream rather than weaken the check.
+// resulting roothash matches the orchestrator-claimed value. All-or-
+// nothing: a single mismatch (or any apt failure) leaves repo/ untouched
+// and returns an error.
 func buildMissingLayers(k *kit.Kit, missing []kit.LayerRef,
 	expectedRoothashes map[string]string) error {
 
@@ -334,7 +334,6 @@ func buildMissingLayers(k *kit.Kit, missing []kit.LayerRef,
 		return fmt.Errorf("bind chroot: %w", err)
 	}
 
-	// Build a list of pkg=version strings for apt and a slug → LayerRef map.
 	bySlug := map[string]kit.LayerRef{}
 	var aptPkgs []string
 	for _, L := range missing {
@@ -350,7 +349,7 @@ func buildMissingLayers(k *kit.Kit, missing []kit.LayerRef,
 		"LANG=C.UTF-8",
 	}
 	fmt.Fprintf(os.Stderr,
-		"[serve] apt-get install %v in materialized chroot\n", aptPkgs)
+		"[pancaked] apt-get install %v in materialized chroot\n", aptPkgs)
 	if err := runner.Run(runner.Cmd{
 		Argv: []string{"chroot", sb.Path, "apt-get", "update", "-q", "-y"},
 		Env:  env,
@@ -366,8 +365,6 @@ func buildMissingLayers(k *kit.Kit, missing []kit.LayerRef,
 		return fmt.Errorf("apt-get install: %w", err)
 	}
 
-	// Stage + verity-format each missing slug into a tmp dir; only move
-	// to repo/ after roothash verification succeeds for ALL of them.
 	stageRoot, err := os.MkdirTemp("", "pancake-rebuild-stage-")
 	if err != nil {
 		return err
@@ -377,7 +374,7 @@ func buildMissingLayers(k *kit.Kit, missing []kit.LayerRef,
 	type built struct {
 		slug, repoDir, tmpImg, tmpHash, roothash string
 		dataSize                                 int64
-		desc, deps, arch                         string
+		desc, deps                               string
 	}
 	var bs []built
 	for slug, L := range bySlug {
@@ -394,28 +391,35 @@ func buildMissingLayers(k *kit.Kit, missing []kit.LayerRef,
 			return fmt.Errorf("stage_files %s: %w", L.Name, err)
 		}
 		tmpImg := filepath.Join(stageRoot, slug+".img")
+		labelName := L.Name
+		if len(labelName) > 12 {
+			labelName = labelName[:12]
+		}
 		roothash, dataSize, err := layer.MakeVerity(stagingDir, tmpImg,
-			"pk-"+truncateStr(L.Name, 12), 0, slug)
+			"pk-"+labelName, 0, slug)
 		if err != nil {
 			return fmt.Errorf("make_verity %s: %w", L.Name, err)
 		}
 		if roothash != expected {
 			return fmt.Errorf("layer %s roothash mismatch:\n  built    = %s\n  expected = %s\n"+
-				"(deterministic-build invariant violated; either mkfs.ext4 / "+
-				"veritysetup non-determinism or a different .deb version on this VM's apt repo)",
+				"(deterministic-build invariant violated; either mkfs.ext4/veritysetup "+
+				"non-determinism or a different .deb version on this VM's apt repo)",
 				slug, roothash, expected)
 		}
 		descRaw, _ := deb.PackageField(sb.Path, L.Name, "Description")
 		depsRaw, _ := deb.PackageField(sb.Path, L.Name, "Depends")
+		desc := descRaw
+		if i := strings.IndexByte(desc, '\n'); i > 0 {
+			desc = desc[:i]
+		}
 		bs = append(bs, built{
 			slug: slug, repoDir: filepath.Join(k.Repo(), slug),
 			tmpImg: tmpImg, tmpHash: tmpImg + ".hash",
 			roothash: roothash, dataSize: dataSize,
-			desc: firstLine(descRaw), deps: depsRaw, arch: L.Version, // arch via L (TODO: include)
+			desc: desc, deps: depsRaw,
 		})
 	}
 
-	// All built + verified. Move into repo/<slug>/ atomically (per layer).
 	for _, b := range bs {
 		if err := os.MkdirAll(b.repoDir, 0o755); err != nil {
 			return err
@@ -445,27 +449,17 @@ func buildMissingLayers(k *kit.Kit, missing []kit.LayerRef,
 	return nil
 }
 
-// readManifestFromKit reads the three sidecar files for genID into a
-// proto Manifest. Used by GetCurrentManifest and by `pancake orchestrate
-// push --kit ...` (which builds a Manifest from a kit dir).
-func readManifestFromKit(k *kit.Kit, genID int) (*orchpb.Manifest, error) {
-	dir := filepath.Join(k.Generations(), strconv.Itoa(genID))
-	mt, err := os.ReadFile(filepath.Join(dir, "manifest.toml"))
+// LoadSealedToken decrypts a systemd-creds-sealed token blob via the TPM.
+// The PCR policy bound at enrollment time must match current PCR values
+// or the unseal fails.
+func LoadSealedToken(path string) (string, error) {
+	out, err := runner.Capture(runner.Cmd{
+		Argv: []string{"systemd-creds", "decrypt",
+			"--name=pancake-orch-token", path, "-"},
+		Sudo: true,
+	})
 	if err != nil {
-		return nil, status.Error(codes.NotFound, err.Error())
+		return "", fmt.Errorf("systemd-creds decrypt %s: %w", path, err)
 	}
-	ms, err := os.ReadFile(filepath.Join(dir, "manifest.toml.sig"))
-	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition,
-			"manifest.toml.sig missing — kit was built without --sign-key")
-	}
-	lo, err := os.ReadFile(filepath.Join(dir, "lowers"))
-	if err != nil {
-		return nil, status.Error(codes.NotFound, err.Error())
-	}
-	return &orchpb.Manifest{
-		ManifestToml: mt,
-		ManifestSig:  ms,
-		Lowers:       lo,
-	}, nil
+	return strings.TrimSpace(out), nil
 }

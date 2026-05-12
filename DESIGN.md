@@ -239,12 +239,13 @@ is also written by systemd-stub.
 - [x] TPM-sealed orchestrator-update auth token (Step 4) —
       `pancake enroll` generates a random 256-bit bearer token and
       seals it via `systemd-creds encrypt --tpm2-pcrs=7+11` to
-      `/etc/pancake/orch-token.creds`. `pancake serve --tpm-token`
-      decrypts at startup; PCR mismatch (kernel/initrd swap → different
-      PCR 11) → `Operation not permitted` → server refuses to start.
-      Effectively quarantines a tampered fleet member from accepting
-      pushes. Re-enrollment is required after any boot-chain change
-      (deliberate; bind-to-current-state is the whole point).
+      `/etc/pancake/orch-token.creds`. The `pancaked` daemon
+      (separate binary, separate verity layer, systemd-managed)
+      decrypts at startup via `--tpm-token=auto`; PCR mismatch
+      (kernel/initrd swap → different PCR 11) → `Operation not
+      permitted` → daemon refuses to start. Effectively quarantines a
+      tampered fleet member from accepting pushes. Re-enrollment is
+      required after any boot-chain change.
 - [ ] LUKS2 encryption of the state partition with TPM-sealed key
       (Step 5, deferred — kit is mostly public-FOSS so confidentiality
       isn't the most valuable next thing; integrity gates are already

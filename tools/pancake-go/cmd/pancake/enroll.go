@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/runner"
@@ -107,16 +106,5 @@ func cmdEnroll(_ *kit.Kit, args []string) int {
 	return 0
 }
 
-// loadSealedToken decrypts a systemd-creds-sealed token and returns the
-// plaintext. Used by `pancake serve --tpm-token` at startup.
-func loadSealedToken(path string) (string, error) {
-	out, err := runner.Capture(runner.Cmd{
-		Argv: []string{"systemd-creds", "decrypt",
-			"--name=pancake-orch-token", path, "-"},
-		Sudo: true,
-	})
-	if err != nil {
-		return "", fmt.Errorf("systemd-creds decrypt %s: %w", path, err)
-	}
-	return strings.TrimSpace(out), nil
-}
+// (loadSealedToken moved to internal/orchsrv.LoadSealedToken — only
+// pancaked needs to decrypt; enroll.go just produces the encrypted blob.)

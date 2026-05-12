@@ -109,25 +109,53 @@ sudo tools/pancake-go/bin/pancake bootstrap \
 
 Pass an empty string to skip any one step (e.g. `--image=""`).
 
-### TPM-sealed serve auth (PCR 7 + 11)
+### `pancaked` — the update daemon
 
-By default `pancake serve` is unauthenticated (signature on the manifest
-is the integrity floor). For real fleets, bind serve's bearer-token
-auth to the boot chain so a tampered VM can't accept updates:
+The receiver side runs as a long-lived daemon, NOT a CLI subcommand.
+Bootstrap ships a separate `pancaked` binary inside its own verity
+layer (`kit/repo/pancaked/`) along with a systemd unit:
+
+```
+[Unit]
+After=pancake-state-rw.service
+Requires=pancake-state-rw.service
+[Service]
+ExecStart=/usr/sbin/pancaked --tpm-token=auto
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+```
+
+The unit's `multi-user.target.wants` symlink ships in the layer too,
+so first boot brings the daemon up automatically — no `systemctl
+enable` needed. Inspect it with `systemctl status pancaked` like any
+other service.
+
+Because the daemon lives in its OWN layer (separate from
+pancake-state, pancake-kernel, etc.), pushing a new generation that
+swaps in a newer pancaked is a normal manifest update — pancaked
+itself becomes a fleet-managed component.
+
+### TPM-sealed daemon auth (PCR 7 + 11)
+
+By default pancaked starts unauthenticated (signature on the manifest
+is the integrity floor). For real fleets, bind the daemon's
+bearer-token auth to the boot chain so a tampered VM can't accept
+updates:
 
 ```sh
-# in-VM, after the kit is up and the TPM is initialised
-pancake enroll                              # → prints bearer token "abc123…"
-                                            #   sealed blob at /etc/pancake/orch-token.creds
-
-pancake serve --tpm-token /etc/pancake/orch-token.creds
-# → [serve] auth token unsealed from TPM (PCR-bound to current boot chain)
+# in-VM, after first boot:
+pancake enroll                              # prints bearer token "abc123…"
+                                            # sealed blob at /etc/pancake/orch-token.creds
+systemctl restart pancaked                  # daemon picks up the sealed
+                                            # token via --tpm-token=auto
 ```
 
 Subsequent boots into the same kernel/initrd unseal cleanly. If the
 boot chain changes (kernel update, initrd swap), PCR 11 differs, the
-TPM refuses to release the token, serve fails to start. Re-enroll
-after any deliberate boot-chain change.
+TPM refuses to release the token, pancaked falls back to refusing
+auth (or, if the file exists but unseal fails, refuses to start).
+Re-enroll after any deliberate boot-chain change.
 
 The orchestrator side is unchanged — operator passes the plaintext
 token via `--token-file`:

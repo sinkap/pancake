@@ -34,12 +34,10 @@ modify (in-VM only — operate on the running pancake-os):
   activate <id>       set current → generations/<id>  (offline; for next boot)
   rollback            current → previous generation
   swap [<id>]         live pivot_root onto a generation, no reboot
-  serve               in-VM gRPC server: GetCurrentManifest + Update
-                      (orchestrator pushes signed manifests here)
   enroll              seal a fresh orchestrator-update bearer token to
-                      this VM's boot chain via TPM PCR 7+11. Subsequent
-                      'pancake serve' requires a matching boot chain to
-                      decrypt and accept updates.
+                      this VM's boot chain via TPM PCR 7+11. The pancaked
+                      daemon (separate binary, runs as a systemd unit)
+                      consumes the sealed blob with --tpm-token=auto.
 
 orchestrator (build/admin host):
   orchestrate get-current  ask a VM what manifest it's running
@@ -105,8 +103,6 @@ func main() {
 		rc = cmdBuild(k, args)
 	case "bootstrap":
 		rc = cmdBootstrap(k, args)
-	case "serve":
-		rc = cmdServe(k, args)
 	case "enroll":
 		rc = cmdEnroll(k, args)
 	case "orchestrate":
