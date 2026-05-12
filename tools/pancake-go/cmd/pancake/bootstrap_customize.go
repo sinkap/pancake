@@ -16,7 +16,14 @@ import (
 	"path/filepath"
 
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/sign"
 )
+
+// signPubkeyFromCert is a tiny indirection so the bake step can call into
+// internal/sign without growing the existing imports list ergonomics.
+func signPubkeyFromCert(certPath, outPath string) error {
+	return sign.PubkeyFromCert(certPath, outPath)
+}
 
 func customizeSandbox(sandbox string, a bootstrapArgs) error {
 	fmt.Fprintln(os.Stderr, "\n[bootstrap] customizing sandbox")
@@ -266,7 +273,37 @@ func bakePancakeRuntime(sandbox string, a bootstrapArgs) error {
 		}
 	}
 
-	// 3. systemd unit to remount /var/lib/pancake rw at boot. The initramfs
+	// 3. Bake the manifest pubkey into the running rootfs too, so the
+	// in-VM `pancake serve` / `pancake update` can verify pushed bundles
+	// (the initramfs has its own copy at /etc/pancake/manifest.pubkey
+	// but the running system mounts a different overlay; this puts a
+	// copy inside one of the kit layers). Only when --sign-cert is set
+	// at bootstrap time.
+	if a.SignCert != "" {
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"install", "-d", "-m", "0755",
+				filepath.Join(sandbox, "etc/pancake")},
+			Sudo: true,
+		}); err != nil {
+			return err
+		}
+		// Reuse the pubkey extraction from sign.PubkeyFromCert via a
+		// tempfile, then install it.
+		tmpPub := filepath.Join("/tmp", "_pancake-pubkey-bake.pem")
+		if err := signPubkeyFromCert(a.SignCert, tmpPub); err != nil {
+			return err
+		}
+		defer os.Remove(tmpPub)
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"install", "-m", "0644", tmpPub,
+				filepath.Join(sandbox, "etc/pancake/manifest.pubkey")},
+			Sudo: true,
+		}); err != nil {
+			return err
+		}
+	}
+
+	// 4. systemd unit to remount /var/lib/pancake rw at boot. The initramfs
 	// mounts it RO; pancake install/swap need to write into kit/repo/.
 	unit := `[Unit]
 Description=Remount /var/lib/pancake read-write for pancake CLI

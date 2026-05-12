@@ -109,6 +109,46 @@ sudo tools/pancake-go/bin/pancake bootstrap \
 
 Pass an empty string to skip any one step (e.g. `--image=""`).
 
+### Push updates: orchestrator → VM via gRPC
+
+`pancake serve` runs inside the VM and exposes a tiny gRPC service
+(`internal/orchpb/pancake.proto`) with two RPCs:
+
+- `GetCurrentManifest()` — what the VM is currently set to boot
+- `Update(Manifest)` — atomically install a new signed manifest
+
+The orchestrator (any host with the kit + signing materials) calls these
+via `pancake orchestrate get-current` and `pancake orchestrate push`.
+Only the **signed manifest** crosses the wire — layer files (image.img /
+image.hash) live on the VM's disk already, populated either at bootstrap
+or by `pancake install`. If the pushed manifest references a layer the
+VM doesn't have, Update returns the missing slugs and the operator
+ships them out-of-band (TODO: `PushLayer` RPC, deterministic-rebuild
+from apt).
+
+Demo on one host (orchestrator on the host, VM in QEMU with port 7878
+forwarded):
+
+```sh
+# inside the VM:
+pancake serve --listen :7878 &
+
+# on the orchestrator host:
+pancake orchestrate get-current --target localhost:7878
+# → VM is on generation 1 (counter 1, 147 layers)
+
+pancake orchestrate push --target localhost:7878 --kit /var/tmp/kit --gen-id 2
+# → installed generation 2 on localhost:7878
+
+# back in the VM:
+pancake swap 2     # live-pivot, no reboot
+```
+
+The VM's Update handler enforces the same gates as boot: signature must
+verify against `/etc/pancake/manifest.pubkey` (baked at bootstrap),
+counter must be strictly greater than any local manifest's counter, and
+every referenced layer must already be in `kit/repo/`.
+
 ### Boot integrity (signing)
 
 When `--sign-key` + `--sign-cert` are passed, three things happen:

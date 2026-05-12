@@ -202,3 +202,40 @@ func EnsureKeyAndCert(keyPath, certPath, hostname string) (bool, error) {
 	certOut.Close()
 	return true, nil
 }
+
+// VerifyManifest checks an RSA-SHA256 detached signature (as produced by
+// SignManifest) against a PKIX PEM public key. Used by the in-VM CLI
+// (`pancake serve`, `pancake update`) to validate manifests delivered
+// over the network — same algorithm as the boot-time openssl-based
+// check in initramfs/init, but run in-process here.
+func VerifyManifest(manifestPath, sigPath, pubkeyPath string) error {
+	pubPEM, err := os.ReadFile(pubkeyPath)
+	if err != nil {
+		return fmt.Errorf("read pubkey: %w", err)
+	}
+	block, _ := pem.Decode(pubPEM)
+	if block == nil {
+		return fmt.Errorf("%s: not a PEM file", pubkeyPath)
+	}
+	pubAny, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse pubkey: %w", err)
+	}
+	pub, ok := pubAny.(*rsa.PublicKey)
+	if !ok {
+		return fmt.Errorf("%s: not an RSA public key", pubkeyPath)
+	}
+	manifestBytes, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return fmt.Errorf("read manifest: %w", err)
+	}
+	sig, err := os.ReadFile(sigPath)
+	if err != nil {
+		return fmt.Errorf("read signature: %w", err)
+	}
+	digest := sha256.Sum256(manifestBytes)
+	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], sig); err != nil {
+		return fmt.Errorf("signature verification failed: %w", err)
+	}
+	return nil
+}

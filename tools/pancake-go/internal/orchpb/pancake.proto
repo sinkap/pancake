@@ -1,0 +1,64 @@
+// pancake-os orchestrator protocol.
+//
+// The wire is dead simple: the manifest IS the contract. The VM keeps
+// its layer cache (kit/repo/) populated by whatever means (bootstrap,
+// pancake install, future deterministic-build path). The orchestrator
+// only ever exchanges the *signed manifest* for one generation.
+//
+//   GetCurrentManifest()  →  what the VM is running right now
+//   Update(Manifest)       →  apply the supplied signed manifest
+//
+// On Update, the VM verifies sig + counter + presence of every layer
+// the manifest references. Missing layers cause the call to fail with
+// a clear list — getting layers onto the VM is out-of-band (kit was
+// pre-shipped at bootstrap, or future work: VM rebuilds from apt).
+
+syntax = "proto3";
+
+package pancake.v1;
+
+option go_package = "github.com/sinkap/fs-pancake/tools/pancake-go/internal/orchpb";
+
+service Pancake {
+  // GetCurrentManifest returns the manifest of the generation that
+  // `current` symlinks to (i.e., what the VM is "supposed to be on";
+  // not necessarily what it's actively running, since `pancake swap`
+  // may not have been called yet).
+  rpc GetCurrentManifest(GetCurrentManifestRequest) returns (Manifest);
+
+  // Update accepts a new signed manifest. The VM verifies, checks
+  // layer presence, and atomically writes generations/<id>/ on success.
+  // It does NOT flip the current symlink; the caller (or a separate
+  // pancake swap) does that. This keeps Update purely additive — a
+  // failed apply leaves no observable change, and a successful apply
+  // costs nothing until explicitly activated.
+  rpc Update(Manifest) returns (UpdateResponse);
+}
+
+message GetCurrentManifestRequest {}
+
+// Manifest carries the three signed-by-bootstrap files for one
+// generation. The lowers TSV is included because the initramfs reads
+// it without parsing TOML; sending it together avoids the receiver
+// having to regenerate it (which it could, but this is simpler and the
+// file is tiny — typically ~few KB).
+message Manifest {
+  bytes manifest_toml = 1;     // [generation] + [[layer]]... block in TOML
+  bytes manifest_sig = 2;      // RSA-SHA256 detached signature over manifest_toml
+  bytes lowers = 3;            // generations/<id>/lowers TSV sidecar
+}
+
+message UpdateResponse {
+  // installed_generation is the id parsed from the manifest, set on
+  // success only.
+  int32 installed_generation = 1;
+
+  // missing_layer_slugs is non-empty when the manifest references
+  // layers the VM doesn't have in its repo/. The caller sees them and
+  // either ships them out-of-band or aborts.
+  repeated string missing_layer_slugs = 2;
+
+  // error is a human-readable error if the update failed for any other
+  // reason (signature verification, counter rollback, parse failure).
+  string error = 3;
+}

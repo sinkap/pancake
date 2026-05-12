@@ -34,6 +34,12 @@ modify (in-VM only — operate on the running pancake-os):
   activate <id>       set current → generations/<id>  (offline; for next boot)
   rollback            current → previous generation
   swap [<id>]         live pivot_root onto a generation, no reboot
+  serve               in-VM gRPC server: GetCurrentManifest + Update
+                      (orchestrator pushes signed manifests here)
+
+orchestrator (build/admin host):
+  orchestrate get-current  ask a VM what manifest it's running
+  orchestrate push         push a signed manifest from a kit to a VM
 
 Default --kit is /var/lib/pancake (the in-system path). For host-side use
 point it at the kit directory you built with bootstrap.`)
@@ -59,11 +65,12 @@ func main() {
 		return
 	}
 
-	// `bootstrap` and `build` operate on a free-standing path, not on a
-	// pre-existing kit, so we don't pre-validate the --kit dir for them.
+	// `bootstrap`, `build`, and `orchestrate` operate on free-standing
+	// paths, not on a pre-existing in-VM kit, so we don't pre-validate
+	// the global --kit dir for them.
 	var k *kit.Kit
 	switch sub {
-	case "bootstrap", "build":
+	case "bootstrap", "build", "orchestrate":
 		// nil kit; subcommand owns its own paths
 	default:
 		var err error
@@ -94,6 +101,10 @@ func main() {
 		rc = cmdBuild(k, args)
 	case "bootstrap":
 		rc = cmdBootstrap(k, args)
+	case "serve":
+		rc = cmdServe(k, args)
+	case "orchestrate":
+		rc = cmdOrchestrate(k, args)
 	default:
 		fmt.Fprintf(os.Stderr, "pancake: unknown subcommand %q\n", sub)
 		usage()
