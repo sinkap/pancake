@@ -104,8 +104,32 @@ sudo tools/pancake-go/bin/pancake bootstrap \
 | `--bzimage-out` | `./pancake-bzImage` | the kernel binary, for QEMU `-kernel` |
 | `--efi` | `""` (off) | UEFI-bootable disk image (GPT + ESP + rootfs, systemd-boot + UKI). When set, QEMU needs only OVMF + this image — no `-kernel`/`-initrd`. |
 | `--cmdline` | `console=ttyS0 rdinit=/init pancake.state=LABEL=PANCAKE_STATE` | kernel cmdline baked into the UKI for `--efi` |
+| `--sign-key` | `""` (off) | PEM RSA private key. When set with `--sign-cert`, signs UKI for Secure Boot AND signs the generation manifest; bakes the cert's pubkey into the initramfs at `/etc/pancake/manifest.pubkey`. |
+| `--sign-cert` | `""` (off) | PEM X.509 cert matching `--sign-key`. Both files are auto-generated as a self-signed dev pair if neither exists yet. |
 
 Pass an empty string to skip any one step (e.g. `--image=""`).
+
+### Boot integrity (signing)
+
+When `--sign-key` + `--sign-cert` are passed, three things happen:
+
+1. **UKI signing** via `ukify --secureboot-private-key/--secureboot-certificate` →
+   `sbsign`. Resulting UKI is a valid Secure Boot PE binary; UEFI verifies
+   against `db` before loading. (To make Secure Boot actually verify in
+   QEMU, the cert must be enrolled in OVMF's `db` — covered in DESIGN.md.)
+2. **Manifest signing**: `generations/N/manifest.toml.sig` is a raw
+   RSA-PKCS1v15-SHA256 signature over the manifest bytes. Verifiable as:
+   ```sh
+   openssl dgst -sha256 -verify pubkey.pem -signature manifest.toml.sig manifest.toml
+   ```
+3. **Pubkey baked into initramfs** at `/etc/pancake/manifest.pubkey`. The
+   `init` script runs the openssl verify above before opening any verity
+   device. A failed signature drops to an emergency shell — the kit owner
+   cannot be coerced into mounting a tampered layer set.
+
+The PCR layout (UKI sections measured into PCR 11 by systemd-stub,
+manifest hash extended into PCR 13 by `init` if `tpm2_pcrextend` is
+present) is documented in DESIGN.md.
 
 ### EFI boot (no `-kernel` arg)
 

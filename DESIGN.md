@@ -182,11 +182,58 @@ pancake update [pkg]
   Old version's image stays in repo/ until `pancake gc` collects it.
 ```
 
-## Status (this document is alive)
+## Boot-time integrity (signing + measurement)
+
+When `pancake bootstrap` is invoked with `--sign-key` and `--sign-cert`:
+
+- The UKI is signed via `ukify --secureboot-private-key/--secureboot-certificate`,
+  which chains to `sbsign`. UEFI Secure Boot will refuse to load the UKI
+  unless the cert is enrolled in `db`.
+- `generations/N/manifest.toml` gets a sibling `manifest.toml.sig` —
+  a raw RSA-PKCS1v15-SHA256 signature over the manifest bytes.
+- The cert's public key is extracted (PKIX `PUBLIC KEY` PEM) and baked
+  into the initramfs at `/etc/pancake/manifest.pubkey`.
+
+`initramfs/init` then enforces the gate: if `/etc/pancake/manifest.pubkey`
+is present, the matching `.sig` MUST validate before any `veritysetup
+open` happens. A failed signature drops to an emergency shell rather
+than mounting a tampered layer set.
+
+### What's measured into which TPM PCR
+
+When booting via `--efi` (UKI), the chain is:
+
+| PCR | Content | Measured by | Stage |
+|---|---|---|---|
+| 0–3 | Firmware + option ROMs | UEFI | pre-boot |
+| 4 | `systemd-bootx64.efi` binary | UEFI | UKI selection |
+| 5 | `loader.conf` + entries | systemd-boot | before UKI |
+| 7 | Secure Boot policy + cert chain (PK/KEK/db/dbx) | UEFI | sealing target |
+| **11** | **UKI sections: `.linux` + `.initrd` + `.cmdline` + `.osrel` + `.uname`** | **systemd-stub** | UKI entry |
+| 12 | `.cmdline` only (auxiliary) | systemd-stub | UKI entry |
+| **13** | **`generations/<id>/manifest.toml` SHA-256** | **pancake initramfs** | before overlay mount (best-effort, requires `tpm2_pcrextend` in initramfs) |
+
+The user's natural question — *"do we measure the kernel and command line
+separately?"* — is answered by PCR 11: systemd-stub measures every PE
+section of the UKI before jumping to the kernel, so PCR 11 uniquely
+binds the (kernel, initramfs, cmdline) tuple. Sealing an LUKS key
+against PCR 11 is the standard mechanism for "encrypted state unlockable
+only by this exact boot chain". For finer cmdline-only policies, PCR 12
+is also written by systemd-stub.
+
+### Status (this document is alive)
 
 - [x] `pancake build` (one .deb → verity layer)
-- [x] `pancake bootstrap` (mmdebstrap → kit + disk image + initramfs)
+- [x] `pancake bootstrap` (mmdebstrap → kit + disk image + initramfs + EFI disk)
 - [x] `pancake` CLI (list / history / show / install / activate / rollback / swap)
-- [x] `initramfs/init` (manifest-driven boot)
-- [ ] Signed `generations/N/manifest.toml` + TPM-anchored rollback counter
-      (see follow-up; see README "current symlink" discussion)
+- [x] `initramfs/init` (manifest-driven boot, signature verification)
+- [x] UEFI Secure Boot via signed UKI (Step 1 of TPM/signing story)
+- [x] Signed `generations/N/manifest.toml` + initramfs verification (Step 2)
+- [ ] TPM NV monotonic counter for rollback resistance (Step 3 — needs
+      `tpm2-tools` in initramfs and a `counter` field in the generation
+      manifest)
+- [ ] LUKS2 encryption of the state partition with TPM-sealed key
+      (Step 4 — needs `systemd-cryptenroll` with PCR 7 + 11 sealing)
+- [ ] Auto-enroll dev cert into OVMF's `db` for one-command Secure Boot
+      verification in QEMU (Step 5 — convenience; today it's a manual
+      `ovmf-vars-generator` invocation)

@@ -47,6 +47,10 @@ type UKIOpts struct {
 	Cmdline string // kernel cmdline string ("console=... rdinit=/init ...")
 	Out     string // output .efi path
 	UName   string // optional: --uname value (kernel version label)
+	// SignKey + SignCert: when both set, ukify chains to sbsign and
+	// produces a sb-signed UKI (one signed PE binary). UEFI Secure Boot
+	// verifies the signature against db before loading.
+	SignKey, SignCert string
 }
 
 // BuildUKI invokes systemd-ukify(1).
@@ -63,6 +67,11 @@ func BuildUKI(o UKIOpts) error {
 	if o.UName != "" {
 		args = append(args, "--uname", o.UName)
 	}
+	if o.SignKey != "" && o.SignCert != "" {
+		args = append(args,
+			"--secureboot-private-key", o.SignKey,
+			"--secureboot-certificate", o.SignCert)
+	}
 	if err := os.MkdirAll(filepath.Dir(o.Out), 0o755); err != nil {
 		return err
 	}
@@ -72,7 +81,12 @@ func BuildUKI(o UKIOpts) error {
 		return err
 	}
 	st, _ := os.Stat(o.Out)
-	fmt.Fprintf(os.Stderr, "[efi] UKI %s (%s)\n", o.Out, humanSize(st.Size()))
+	tag := ""
+	if o.SignKey != "" {
+		tag = " [signed]"
+	}
+	fmt.Fprintf(os.Stderr, "[efi] UKI %s (%s)%s\n",
+		o.Out, humanSize(st.Size()), tag)
 	return nil
 }
 

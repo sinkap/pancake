@@ -39,6 +39,7 @@ import (
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/layer"
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/pack"
 	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/sign"
 )
 
 // SystemBaseline is what mmdebstrap minbase doesn't pull but pancake-os
@@ -105,6 +106,15 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 	cmdline := fs.String("cmdline",
 		"console=ttyS0 rdinit=/init pancake.state=LABEL=PANCAKE_STATE",
 		"kernel cmdline baked into the UKI when --efi is set")
+	signKey := fs.String("sign-key", "",
+		"PEM private key (RSA-2048) used to sign the UKI (UEFI Secure Boot) "+
+			"AND the generation manifest. Generated alongside --sign-cert "+
+			"if neither file exists. Empty disables signing.")
+	signCert := fs.String("sign-cert", "",
+		"PEM X.509 cert matching --sign-key. UEFI verifies the UKI "+
+			"signature against this cert (must be enrolled in db). The "+
+			"public key is also extracted and baked into the initramfs at "+
+			"/etc/pancake/manifest.pubkey for manifest verification at boot.")
 
 	// bootstrap has no positional args; every flag carries a value, so the
 	// splitFlagsAndPositionals helper would incorrectly demote those values
@@ -136,6 +146,8 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		BzImageOutPath:  *bzimageOut,
 		EFIPath:         *efiOut,
 		Cmdline:         *cmdline,
+		SignKey:         *signKey,
+		SignCert:        *signCert,
 	}); err != nil {
 		return die(err)
 	}
@@ -185,6 +197,10 @@ type bootstrapArgs struct {
 	EFIPath string
 	// Cmdline: kernel cmdline baked into the UKI when EFIPath is set.
 	Cmdline string
+	// SignKey + SignCert: when both set, sign the UKI (UEFI Secure Boot)
+	// and the generation manifest, and bake the cert's public key into
+	// the initramfs so /init can verify the manifest before mounting.
+	SignKey, SignCert string
 }
 
 func bootstrap(a bootstrapArgs) error {
@@ -387,6 +403,37 @@ func bootstrap(a bootstrapArgs) error {
 		return err
 	}
 
+	// Sign the generation manifest if signing material was provided.
+	// Bootstrap auto-generates a self-signed dev pair if neither file
+	// exists yet, so the user gets a working signed kit on first run.
+	if a.SignKey != "" && a.SignCert != "" {
+		hostname := a.Hostname
+		if hostname == "" {
+			hostname = "pancake"
+		}
+		if generated, err := sign.EnsureKeyAndCert(
+			a.SignKey, a.SignCert, hostname); err != nil {
+			return fmt.Errorf("sign-key/sign-cert: %w", err)
+		} else if generated {
+			fmt.Fprintf(os.Stderr,
+				"\n[bootstrap] generated dev signing pair:\n"+
+					"  key:  %s\n  cert: %s\n"+
+					"  (use real keys for production; UEFI db enrollment "+
+					"required for Secure Boot to verify)\n",
+				a.SignKey, a.SignCert)
+		}
+		manifestPath := filepath.Join(k.Generations(), "1", "manifest.toml")
+		if _, err := sign.SignManifest(manifestPath, a.SignKey); err != nil {
+			return fmt.Errorf("sign manifest: %w", err)
+		}
+		fmt.Fprintf(os.Stderr,
+			"  → signed %s.sig (verifiable with `openssl dgst -sha256 "+
+				"-verify pubkey.pem -signature %s.sig %s`)\n",
+			manifestPath, manifestPath, manifestPath)
+	} else if a.SignKey != "" || a.SignCert != "" {
+		return fmt.Errorf("--sign-key and --sign-cert must both be set")
+	}
+
 	// bzImage hand-off for QEMU: do this BEFORE sandbox cleanup since the
 	// suite-kernel path reads /boot/vmlinuz-* out of the sandbox.
 	if a.BzImageOutPath != "" {
@@ -430,12 +477,23 @@ func bootstrap(a bootstrapArgs) error {
 				srcRoot = filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(exe))))
 			}
 		}
+		// If signing is on, extract pubkey from cert into a temp file so
+		// the initramfs builder can bake it at /etc/pancake/manifest.pubkey.
+		var pubkeyPath string
+		if a.SignCert != "" {
+			pubkeyPath = filepath.Join(a.Output, ".pancake-manifest.pubkey")
+			if err := sign.PubkeyFromCert(a.SignCert, pubkeyPath); err != nil {
+				return fmt.Errorf("extract pubkey: %w", err)
+			}
+			defer os.Remove(pubkeyPath)
+		}
 		if err := initramfs.Build(initramfs.Opts{
-			OutPath: a.InitramfsPath,
-			KVer:    a.Kernel,
-			SrcRoot: srcRoot,
-			Suite:   a.Suite,
-			Mirror:  a.Mirror,
+			OutPath:    a.InitramfsPath,
+			KVer:       a.Kernel,
+			SrcRoot:    srcRoot,
+			Suite:      a.Suite,
+			Mirror:     a.Mirror,
+			PubKeyPath: pubkeyPath,
 		}); err != nil {
 			return fmt.Errorf("initramfs: %w", err)
 		}
@@ -457,11 +515,13 @@ func bootstrap(a bootstrapArgs) error {
 			"\n[bootstrap] building UKI + EFI disk → %s\n", a.EFIPath)
 		uki := strings.TrimSuffix(a.EFIPath, filepath.Ext(a.EFIPath)) + ".uki.efi"
 		if err := efi.BuildUKI(efi.UKIOpts{
-			Linux:   a.BzImageOutPath,
-			Initrd:  a.InitramfsPath,
-			Cmdline: a.Cmdline,
-			Out:     uki,
-			UName:   a.Kernel,
+			Linux:    a.BzImageOutPath,
+			Initrd:   a.InitramfsPath,
+			Cmdline:  a.Cmdline,
+			Out:      uki,
+			UName:    a.Kernel,
+			SignKey:  a.SignKey,
+			SignCert: a.SignCert,
 		}); err != nil {
 			return fmt.Errorf("uki: %w", err)
 		}

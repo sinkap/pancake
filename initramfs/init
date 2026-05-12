@@ -73,6 +73,42 @@ esac
 echo "[init] state partition: $state_dev"
 mount -o ro "$state_dev" /pancake-state
 
+# Verify the active generation manifest. If a public key was baked into
+# the initramfs by `pancake bootstrap --sign-cert ...`, /etc/pancake/
+# manifest.pubkey is present and we MUST find a matching .sig and verify.
+# (Lowers itself is just a TSV; the manifest.toml signature covers the
+# whole TOML which authoritatively names the layers + roothashes for
+# this generation. Tampering with lowers would also have to alter the
+# manifest, which would invalidate the signature.)
+MANIFEST="/pancake-state/current/manifest.toml"
+PUBKEY="/etc/pancake/manifest.pubkey"
+if [ -r "$PUBKEY" ]; then
+    if [ ! -r "$MANIFEST.sig" ]; then
+        echo "[init] FATAL: $PUBKEY present but $MANIFEST.sig missing —"
+        echo "[init]        kit was built without --sign-key, or has been tampered with."
+        exec /bin/sh
+    fi
+    if ! openssl dgst -sha256 -verify "$PUBKEY" \
+            -signature "$MANIFEST.sig" "$MANIFEST" >/dev/null; then
+        echo "[init] FATAL: manifest signature verification failed!"
+        echo "[init]        the kit may have been tampered with; refusing to boot."
+        exec /bin/sh
+    fi
+    echo "[init] manifest signature OK"
+    # Best-effort: extend PCR 13 with the manifest hash so attestation /
+    # cryptenroll policies can bind to which generation booted. We do
+    # this only if tpm2_pcrextend is available (it isn't in the default
+    # initramfs deps yet — pulling tpm2-tools would be a follow-up).
+    if command -v tpm2_pcrextend >/dev/null 2>&1; then
+        h=$(sha256sum "$MANIFEST" | awk '{print $1}')
+        tpm2_pcrextend "13:sha256=$h" >/dev/null 2>&1 \
+            && echo "[init] PCR 13 extended with manifest hash $h" \
+            || echo "[init] WARNING: tpm2_pcrextend failed (no TPM?)"
+    fi
+else
+    echo "[init] no /etc/pancake/manifest.pubkey baked in — skipping manifest verification"
+fi
+
 LOWERS_FILE="/pancake-state/current/lowers"
 [ -r "$LOWERS_FILE" ] || {
     echo "[init] FATAL: $LOWERS_FILE missing — is the state partition initialised?"

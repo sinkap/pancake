@@ -23,12 +23,15 @@ import (
 
 // Defaults match the shell version. Pulling util-linux + mount + cryptsetup-bin
 // + e2fsprogs gives us blkid, mount, veritysetup; udev/kmod give modprobe.
+// openssl is for `openssl dgst -verify` against the manifest signature
+// when a baked-in pubkey is present.
 var DefaultPackages = []string{
 	"bash", "coreutils", "util-linux", "mount",
 	"cryptsetup-bin",
 	"kmod", "libzstd1",
 	"udev",
 	"e2fsprogs",
+	"openssl",
 }
 
 // Opts configures Build. SrcRoot must point at the fs-pancake source tree
@@ -43,6 +46,10 @@ type Opts struct {
 	Packages []string // override DefaultPackages if non-nil
 	Stage    string   // override staging dir, default /tmp/pancake-initramfs-stage
 	Force    bool     // rebuild stage even if dir exists (mmdebstrap is slow)
+	// PubKeyPath: when set, copy this PEM-encoded public key into the
+	// initramfs at /etc/pancake/manifest.pubkey. /init then uses it to
+	// verify the manifest signature before mounting the overlay.
+	PubKeyPath string
 }
 
 // Build assembles the initramfs into o.OutPath. Steps mirror the shell
@@ -167,6 +174,29 @@ func Build(o Opts) error {
 		Argv: []string{"depmod", "-b", o.Stage, o.KVer}, Sudo: true,
 	}); err != nil {
 		return err
+	}
+
+	// 4b. Manifest pubkey for /init to verify the kit's manifest signature
+	// before the overlay is mounted. If absent, /init will skip verification
+	// (and warn) — explicit policy lives in initramfs/init.
+	if o.PubKeyPath != "" {
+		fmt.Fprintf(os.Stderr,
+			"[initramfs] installing /etc/pancake/manifest.pubkey from %s\n",
+			o.PubKeyPath)
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"install", "-d", "-m", "0755",
+				filepath.Join(o.Stage, "etc/pancake")},
+			Sudo: true,
+		}); err != nil {
+			return err
+		}
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"install", "-m", "0644", o.PubKeyPath,
+				filepath.Join(o.Stage, "etc/pancake/manifest.pubkey")},
+			Sudo: true,
+		}); err != nil {
+			return err
+		}
 	}
 
 	// 5. cpio.gz the staging dir.
