@@ -68,6 +68,11 @@ func setupAttest() (*attestState, error) {
 	}
 
 	dir := "/run/pancake/attest"
+	// Wipe any leftover state from a prior pancaked run in this same
+	// boot. Stale files (e.g. half-written ek.pub from a process that
+	// crashed mid-init) would otherwise confuse the persistent-vs-
+	// transient detection below.
+	_ = os.RemoveAll(dir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("attest: mkdir %s: %w", dir, err)
 	}
@@ -82,15 +87,21 @@ func setupAttest() (*attestState, error) {
 	// Prefer the persistent EK at the canonical handle (set up once
 	// by `pancake enroll`). Falls back to transient createek for
 	// pre-enrolled hosts so attestation still works on first boot.
-	if err := runner.RunOK(runner.Cmd{
+	// Use Run (not RunOK) so a missing handle returns an error and
+	// we cleanly fall through; otherwise tpm2-tools' stderr spam
+	// would be mistaken for success.
+	readErr := runner.Run(runner.Cmd{
 		Argv: []string{"tpm2_readpublic",
 			"-c", ekHandle, "-o", ekPubPath},
-	}); err == nil {
-		if fi, statErr := os.Stat(ekPubPath); statErr == nil && fi.Size() > 0 {
-			st.ekRef = ekHandle
-			fmt.Fprintf(os.Stderr,
-				"[pancaked] EK loaded from persistent handle %s\n", ekHandle)
-		}
+	})
+	if readErr == nil {
+		st.ekRef = ekHandle
+		fmt.Fprintf(os.Stderr,
+			"[pancaked] EK loaded from persistent handle %s\n", ekHandle)
+	} else {
+		// Belt-and-braces: nuke any partial ek.pub the failed
+		// readpublic might have left behind.
+		_ = os.Remove(ekPubPath)
 	}
 	if st.ekRef == "" {
 		// Fallback: create a transient EK. Same key bytes (deterministic
