@@ -57,6 +57,22 @@ service Pancake {
   //      EK and AK can produce the original secret).
   rpc ActivateCredential(ActivateCredentialRequest)
       returns (ActivateCredentialResponse);
+
+  // AttestSEVSNP returns an AMD SEV-SNP attestation report bound to
+  // the supplied nonce (placed in the report's REPORT_DATA field).
+  // Available only inside SNP-enabled VMs (requires /dev/sev-guest).
+  // Verifier fetches the VCEK certificate from AMD KDS, validates
+  // the cert chain to the AMD Root Key, verifies the report
+  // signature with VCEK, then compares MEASUREMENT against the
+  // expected launch digest (computed from the kit's UKI bytes).
+  // Returns Unavailable on non-SNP hosts.
+  //
+  // Complementary to Attest: SNP attests the *VM launch chain*
+  // (firmware, kernel, initrd) against AMD-rooted hardware identity,
+  // while Attest attests the running pancake-os state (PCR 13/14,
+  // generation manifest) against the per-VM TPM. `pancake attest
+  // --mode=both` runs both for defense in depth.
+  rpc AttestSEVSNP(AttestSEVSNPRequest) returns (AttestSEVSNPResponse);
 }
 
 message GetCurrentManifestRequest {}
@@ -154,4 +170,26 @@ message ActivateCredentialResponse {
   // The decrypted secret. Compare to the original on the verifier
   // side — match proves AK ↔ EK binding.
   bytes secret = 1;
+}
+
+message AttestSEVSNPRequest {
+  // Up to 64 bytes of caller-supplied freshness data; the SNP
+  // hardware copies them into REPORT_DATA so the verifier can
+  // confirm the report was generated for THIS request, not replayed.
+  bytes nonce = 1;
+}
+
+message AttestSEVSNPResponse {
+  // The raw AMD SEV-SNP attestation report (1184 bytes; see AMD
+  // SEV-SNP ABI § 8.7 "ATTESTATION_REPORT"). Includes MEASUREMENT,
+  // REPORT_DATA, CHIP_ID, TCB versions, and an ECDSA-P384/SHA-384
+  // signature over the rest of the structure under the VCEK.
+  bytes report = 1;
+
+  // Optional: the VCEK certificate the verifier should validate
+  // the report signature against. Server tries to fetch it via the
+  // SNP guest "extended report" path (host hypervisor cert chain)
+  // when available; empty otherwise. Verifier falls back to AMD
+  // KDS lookup using CHIP_ID + TCB from the report.
+  bytes vcek_cert = 2;
 }

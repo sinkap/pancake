@@ -391,6 +391,37 @@ What each check means:
 Tamper a layer → PCR 14 mismatch. Swap kernel → PCR 11 firmware-replay
 diverges from what `--kit` claims. Both flagged.
 
+#### SEV-SNP attestation (`--mode=snp` / `--mode=both`)
+
+On AMD EPYC / Threadripper PRO hosts with SEV-SNP enabled (BIOS +
+`kvm_amd.sev_snp=1`), the VM has `/dev/sev-guest`, and pancaked's
+`AttestSEVSNP` RPC returns a hardware-signed attestation report. The
+verifier validates the cert chain to AMD's root key (fetching the
+chip-specific VCEK from AMD KDS), checks nonce binding, and
+optionally compares the launch `MEASUREMENT` against an expected
+value:
+
+```sh
+pancake attest --target=vm:7878 --mode=snp \
+    --expect-measurement=$(sha384sum kit.uki | cut -d' ' -f1)…   # 96-hex-char digest
+
+# or run both for defense in depth:
+pancake attest --target=vm:7878 --mode=both --ek-pub=./vm-ek.pub --kit=./kit
+```
+
+```
+[attest-snp] OK    report signature valid (chain → AMD ARK)
+[attest-snp] OK    nonce in REPORT_DATA matches request (88e6e57e…)
+[attest-snp] INFO  chip_id=ab12… reported_tcb=bl5/tee0/snp22/ucode219 measurement=…
+[attest-snp] OK    MEASUREMENT matches expected
+```
+
+The two modes complement each other: SNP attests the VM **launch
+chain** (firmware, kernel, initrd) against AMD-rooted hardware
+identity; TPM attests the **running pancake-os state** (PCR 13/14,
+generation manifest) against the per-VM TPM. `--mode=both` runs
+both — all checks must PASS for OVERALL PASS.
+
 ### Push updates: orchestrator → VM via gRPC
 
 `pancake serve` runs inside the VM and exposes a tiny gRPC service

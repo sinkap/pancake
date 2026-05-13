@@ -309,8 +309,21 @@ is also written by systemd-stub.
       diverges from firmware-replay because systemd-pcrextend appends
       `sysinit`/`ready`/etc. from userspace — flagged INFO with both
       values, not FAIL.
+- [x] AMD SEV-SNP attestation (Step 6) — `pancaked` exposes
+      `AttestSEVSNP(nonce)` which fetches a hardware attestation
+      report from `/dev/sev-guest`. Returns Unavailable on non-SNP
+      hosts. Verifier (`pancake attest --mode=snp` or `--mode=both`)
+      uses `github.com/google/go-sev-guest/verify` to validate the
+      cert chain (VCEK → ASK → ARK; VCEK fetched from AMD KDS using
+      CHIP_ID + TCB from the report), check nonce binding via
+      `REPORT_DATA`, and (when `--expect-measurement` is set)
+      cryptographically pin the launch digest. Complementary to TPM
+      attestation: SNP covers the VM launch chain (firmware + kernel
+      + initrd, hardware-rooted), TPM covers the running pancake-os
+      state (PCR 13/14, manifest). `--mode=both` runs both for
+      defense in depth.
 - [ ] LUKS2 encryption of the state partition with TPM-sealed key
-      (Step 5, deferred — kit is mostly public-FOSS so confidentiality
+      (Step 7, deferred — kit is mostly public-FOSS so confidentiality
       isn't the most valuable next thing; integrity gates are already
       in place).
 - [ ] Full reproducible-build pin for `pancake serve`'s auto-rebuild

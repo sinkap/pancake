@@ -38,6 +38,7 @@ const (
 	Pancake_Update_FullMethodName             = "/pancake.v1.Pancake/Update"
 	Pancake_Attest_FullMethodName             = "/pancake.v1.Pancake/Attest"
 	Pancake_ActivateCredential_FullMethodName = "/pancake.v1.Pancake/ActivateCredential"
+	Pancake_AttestSEVSNP_FullMethodName       = "/pancake.v1.Pancake/AttestSEVSNP"
 )
 
 // PancakeClient is the client API for Pancake service.
@@ -78,6 +79,21 @@ type PancakeClient interface {
 	//     keyed to AK.name, only an activation by a TPM holding both
 	//     EK and AK can produce the original secret).
 	ActivateCredential(ctx context.Context, in *ActivateCredentialRequest, opts ...grpc.CallOption) (*ActivateCredentialResponse, error)
+	// AttestSEVSNP returns an AMD SEV-SNP attestation report bound to
+	// the supplied nonce (placed in the report's REPORT_DATA field).
+	// Available only inside SNP-enabled VMs (requires /dev/sev-guest).
+	// Verifier fetches the VCEK certificate from AMD KDS, validates
+	// the cert chain to the AMD Root Key, verifies the report
+	// signature with VCEK, then compares MEASUREMENT against the
+	// expected launch digest (computed from the kit's UKI bytes).
+	// Returns Unavailable on non-SNP hosts.
+	//
+	// Complementary to Attest: SNP attests the *VM launch chain*
+	// (firmware, kernel, initrd) against AMD-rooted hardware identity,
+	// while Attest attests the running pancake-os state (PCR 13/14,
+	// generation manifest) against the per-VM TPM. `pancake attest
+	// --mode=both` runs both for defense in depth.
+	AttestSEVSNP(ctx context.Context, in *AttestSEVSNPRequest, opts ...grpc.CallOption) (*AttestSEVSNPResponse, error)
 }
 
 type pancakeClient struct {
@@ -128,6 +144,16 @@ func (c *pancakeClient) ActivateCredential(ctx context.Context, in *ActivateCred
 	return out, nil
 }
 
+func (c *pancakeClient) AttestSEVSNP(ctx context.Context, in *AttestSEVSNPRequest, opts ...grpc.CallOption) (*AttestSEVSNPResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AttestSEVSNPResponse)
+	err := c.cc.Invoke(ctx, Pancake_AttestSEVSNP_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PancakeServer is the server API for Pancake service.
 // All implementations must embed UnimplementedPancakeServer
 // for forward compatibility.
@@ -166,6 +192,21 @@ type PancakeServer interface {
 	//     keyed to AK.name, only an activation by a TPM holding both
 	//     EK and AK can produce the original secret).
 	ActivateCredential(context.Context, *ActivateCredentialRequest) (*ActivateCredentialResponse, error)
+	// AttestSEVSNP returns an AMD SEV-SNP attestation report bound to
+	// the supplied nonce (placed in the report's REPORT_DATA field).
+	// Available only inside SNP-enabled VMs (requires /dev/sev-guest).
+	// Verifier fetches the VCEK certificate from AMD KDS, validates
+	// the cert chain to the AMD Root Key, verifies the report
+	// signature with VCEK, then compares MEASUREMENT against the
+	// expected launch digest (computed from the kit's UKI bytes).
+	// Returns Unavailable on non-SNP hosts.
+	//
+	// Complementary to Attest: SNP attests the *VM launch chain*
+	// (firmware, kernel, initrd) against AMD-rooted hardware identity,
+	// while Attest attests the running pancake-os state (PCR 13/14,
+	// generation manifest) against the per-VM TPM. `pancake attest
+	// --mode=both` runs both for defense in depth.
+	AttestSEVSNP(context.Context, *AttestSEVSNPRequest) (*AttestSEVSNPResponse, error)
 	mustEmbedUnimplementedPancakeServer()
 }
 
@@ -187,6 +228,9 @@ func (UnimplementedPancakeServer) Attest(context.Context, *AttestRequest) (*Atte
 }
 func (UnimplementedPancakeServer) ActivateCredential(context.Context, *ActivateCredentialRequest) (*ActivateCredentialResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ActivateCredential not implemented")
+}
+func (UnimplementedPancakeServer) AttestSEVSNP(context.Context, *AttestSEVSNPRequest) (*AttestSEVSNPResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AttestSEVSNP not implemented")
 }
 func (UnimplementedPancakeServer) mustEmbedUnimplementedPancakeServer() {}
 func (UnimplementedPancakeServer) testEmbeddedByValue()                 {}
@@ -281,6 +325,24 @@ func _Pancake_ActivateCredential_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Pancake_AttestSEVSNP_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AttestSEVSNPRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PancakeServer).AttestSEVSNP(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Pancake_AttestSEVSNP_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PancakeServer).AttestSEVSNP(ctx, req.(*AttestSEVSNPRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Pancake_ServiceDesc is the grpc.ServiceDesc for Pancake service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -303,6 +365,10 @@ var Pancake_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ActivateCredential",
 			Handler:    _Pancake_ActivateCredential_Handler,
+		},
+		{
+			MethodName: "AttestSEVSNP",
+			Handler:    _Pancake_AttestSEVSNP_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -475,6 +475,114 @@ func (x *ActivateCredentialResponse) GetSecret() []byte {
 	return nil
 }
 
+type AttestSEVSNPRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Up to 64 bytes of caller-supplied freshness data; the SNP
+	// hardware copies them into REPORT_DATA so the verifier can
+	// confirm the report was generated for THIS request, not replayed.
+	Nonce         []byte `protobuf:"bytes,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttestSEVSNPRequest) Reset() {
+	*x = AttestSEVSNPRequest{}
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttestSEVSNPRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttestSEVSNPRequest) ProtoMessage() {}
+
+func (x *AttestSEVSNPRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttestSEVSNPRequest.ProtoReflect.Descriptor instead.
+func (*AttestSEVSNPRequest) Descriptor() ([]byte, []int) {
+	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *AttestSEVSNPRequest) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+type AttestSEVSNPResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The raw AMD SEV-SNP attestation report (1184 bytes; see AMD
+	// SEV-SNP ABI § 8.7 "ATTESTATION_REPORT"). Includes MEASUREMENT,
+	// REPORT_DATA, CHIP_ID, TCB versions, and an ECDSA-P384/SHA-384
+	// signature over the rest of the structure under the VCEK.
+	Report []byte `protobuf:"bytes,1,opt,name=report,proto3" json:"report,omitempty"`
+	// Optional: the VCEK certificate the verifier should validate
+	// the report signature against. Server tries to fetch it via the
+	// SNP guest "extended report" path (host hypervisor cert chain)
+	// when available; empty otherwise. Verifier falls back to AMD
+	// KDS lookup using CHIP_ID + TCB from the report.
+	VcekCert      []byte `protobuf:"bytes,2,opt,name=vcek_cert,json=vcekCert,proto3" json:"vcek_cert,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttestSEVSNPResponse) Reset() {
+	*x = AttestSEVSNPResponse{}
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttestSEVSNPResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttestSEVSNPResponse) ProtoMessage() {}
+
+func (x *AttestSEVSNPResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttestSEVSNPResponse.ProtoReflect.Descriptor instead.
+func (*AttestSEVSNPResponse) Descriptor() ([]byte, []int) {
+	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *AttestSEVSNPResponse) GetReport() []byte {
+	if x != nil {
+		return x.Report
+	}
+	return nil
+}
+
+func (x *AttestSEVSNPResponse) GetVcekCert() []byte {
+	if x != nil {
+		return x.VcekCert
+	}
+	return nil
+}
+
 // PCR digests, in the same order as request.pcrs (or the default
 // set if request.pcrs was empty). For sha256 these are 32 bytes
 // each. Carried in addition to the quote so verifiers can
@@ -489,7 +597,7 @@ type AttestResponse_PcrDigest struct {
 
 func (x *AttestResponse_PcrDigest) Reset() {
 	*x = AttestResponse_PcrDigest{}
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[7]
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -501,7 +609,7 @@ func (x *AttestResponse_PcrDigest) String() string {
 func (*AttestResponse_PcrDigest) ProtoMessage() {}
 
 func (x *AttestResponse_PcrDigest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[7]
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -564,12 +672,18 @@ const file_internal_orchpb_pancake_proto_rawDesc = "" +
 	"\x19ActivateCredentialRequest\x12\x12\n" +
 	"\x04blob\x18\x01 \x01(\fR\x04blob\"4\n" +
 	"\x1aActivateCredentialResponse\x12\x16\n" +
-	"\x06secret\x18\x01 \x01(\fR\x06secret2\xbe\x02\n" +
+	"\x06secret\x18\x01 \x01(\fR\x06secret\"+\n" +
+	"\x13AttestSEVSNPRequest\x12\x14\n" +
+	"\x05nonce\x18\x01 \x01(\fR\x05nonce\"K\n" +
+	"\x14AttestSEVSNPResponse\x12\x16\n" +
+	"\x06report\x18\x01 \x01(\fR\x06report\x12\x1b\n" +
+	"\tvcek_cert\x18\x02 \x01(\fR\bvcekCert2\x91\x03\n" +
 	"\aPancake\x12Q\n" +
 	"\x12GetCurrentManifest\x12%.pancake.v1.GetCurrentManifestRequest\x1a\x14.pancake.v1.Manifest\x12:\n" +
 	"\x06Update\x12\x14.pancake.v1.Manifest\x1a\x1a.pancake.v1.UpdateResponse\x12?\n" +
 	"\x06Attest\x12\x19.pancake.v1.AttestRequest\x1a\x1a.pancake.v1.AttestResponse\x12c\n" +
-	"\x12ActivateCredential\x12%.pancake.v1.ActivateCredentialRequest\x1a&.pancake.v1.ActivateCredentialResponseB<Z:github.com/sinkap/pancake/tools/pancake-go/internal/orchpbb\x06proto3"
+	"\x12ActivateCredential\x12%.pancake.v1.ActivateCredentialRequest\x1a&.pancake.v1.ActivateCredentialResponse\x12Q\n" +
+	"\fAttestSEVSNP\x12\x1f.pancake.v1.AttestSEVSNPRequest\x1a .pancake.v1.AttestSEVSNPResponseB<Z:github.com/sinkap/pancake/tools/pancake-go/internal/orchpbb\x06proto3"
 
 var (
 	file_internal_orchpb_pancake_proto_rawDescOnce sync.Once
@@ -583,7 +697,7 @@ func file_internal_orchpb_pancake_proto_rawDescGZIP() []byte {
 	return file_internal_orchpb_pancake_proto_rawDescData
 }
 
-var file_internal_orchpb_pancake_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_internal_orchpb_pancake_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_internal_orchpb_pancake_proto_goTypes = []any{
 	(*GetCurrentManifestRequest)(nil),  // 0: pancake.v1.GetCurrentManifestRequest
 	(*Manifest)(nil),                   // 1: pancake.v1.Manifest
@@ -592,20 +706,24 @@ var file_internal_orchpb_pancake_proto_goTypes = []any{
 	(*AttestResponse)(nil),             // 4: pancake.v1.AttestResponse
 	(*ActivateCredentialRequest)(nil),  // 5: pancake.v1.ActivateCredentialRequest
 	(*ActivateCredentialResponse)(nil), // 6: pancake.v1.ActivateCredentialResponse
-	(*AttestResponse_PcrDigest)(nil),   // 7: pancake.v1.AttestResponse.PcrDigest
+	(*AttestSEVSNPRequest)(nil),        // 7: pancake.v1.AttestSEVSNPRequest
+	(*AttestSEVSNPResponse)(nil),       // 8: pancake.v1.AttestSEVSNPResponse
+	(*AttestResponse_PcrDigest)(nil),   // 9: pancake.v1.AttestResponse.PcrDigest
 }
 var file_internal_orchpb_pancake_proto_depIdxs = []int32{
-	7, // 0: pancake.v1.AttestResponse.pcr:type_name -> pancake.v1.AttestResponse.PcrDigest
+	9, // 0: pancake.v1.AttestResponse.pcr:type_name -> pancake.v1.AttestResponse.PcrDigest
 	0, // 1: pancake.v1.Pancake.GetCurrentManifest:input_type -> pancake.v1.GetCurrentManifestRequest
 	1, // 2: pancake.v1.Pancake.Update:input_type -> pancake.v1.Manifest
 	3, // 3: pancake.v1.Pancake.Attest:input_type -> pancake.v1.AttestRequest
 	5, // 4: pancake.v1.Pancake.ActivateCredential:input_type -> pancake.v1.ActivateCredentialRequest
-	1, // 5: pancake.v1.Pancake.GetCurrentManifest:output_type -> pancake.v1.Manifest
-	2, // 6: pancake.v1.Pancake.Update:output_type -> pancake.v1.UpdateResponse
-	4, // 7: pancake.v1.Pancake.Attest:output_type -> pancake.v1.AttestResponse
-	6, // 8: pancake.v1.Pancake.ActivateCredential:output_type -> pancake.v1.ActivateCredentialResponse
-	5, // [5:9] is the sub-list for method output_type
-	1, // [1:5] is the sub-list for method input_type
+	7, // 5: pancake.v1.Pancake.AttestSEVSNP:input_type -> pancake.v1.AttestSEVSNPRequest
+	1, // 6: pancake.v1.Pancake.GetCurrentManifest:output_type -> pancake.v1.Manifest
+	2, // 7: pancake.v1.Pancake.Update:output_type -> pancake.v1.UpdateResponse
+	4, // 8: pancake.v1.Pancake.Attest:output_type -> pancake.v1.AttestResponse
+	6, // 9: pancake.v1.Pancake.ActivateCredential:output_type -> pancake.v1.ActivateCredentialResponse
+	8, // 10: pancake.v1.Pancake.AttestSEVSNP:output_type -> pancake.v1.AttestSEVSNPResponse
+	6, // [6:11] is the sub-list for method output_type
+	1, // [1:6] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
@@ -622,7 +740,7 @@ func file_internal_orchpb_pancake_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_orchpb_pancake_proto_rawDesc), len(file_internal_orchpb_pancake_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

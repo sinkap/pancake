@@ -57,11 +57,22 @@ func cmdAttest(_ *kit.Kit, args []string) int {
 			"Used to compute expected PCR 13 + 14. Skipped if empty.")
 	expectGen := fs.Int("gen", 1,
 		"generation id under --kit to compute expected PCR values from")
+	mode := fs.String("mode", "tpm",
+		"attestation mode: 'tpm' (default; per-VM TPM quote + PCRs), "+
+			"'snp' (AMD SEV-SNP hardware report from /dev/sev-guest), "+
+			"or 'both' (run both, all checks must pass)")
+	expectMeasurement := fs.String("expect-measurement", "",
+		"expected SEV-SNP MEASUREMENT (hex; 96 chars / 48 bytes). "+
+			"When set in --mode=snp/both, the report's MEASUREMENT must "+
+			"match — proves the launched UKI is the one we built.")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *target == "" {
 		return die(fmt.Errorf("--target is required"))
+	}
+	if *mode != "tpm" && *mode != "snp" && *mode != "both" {
+		return die(fmt.Errorf("--mode must be tpm, snp, or both"))
 	}
 
 	// Fresh 32-byte nonce so the quote can't be replayed.
@@ -88,6 +99,29 @@ func cmdAttest(_ *kit.Kit, args []string) int {
 		ctx = metadata.AppendToOutgoingContext(ctx,
 			"authorization", "Bearer "+trimSpace(string(b)))
 	}
+
+	pass := true
+
+	// SEV-SNP path. In `--mode=both`, fail-on-error from the SNP
+	// branch is independent of the TPM branch — both must succeed
+	// for OVERALL PASS.
+	if *mode == "snp" || *mode == "both" {
+		if err := attestSNPCheck(ctx, cli, nonce, *expectMeasurement); err != nil {
+			fmt.Printf("[attest-snp] FAIL  %v\n", err)
+			pass = false
+		}
+		if *mode == "snp" {
+			if !pass {
+				fmt.Fprintln(os.Stderr, "\n[attest] OVERALL FAIL")
+				return 1
+			}
+			fmt.Fprintln(os.Stderr, "\n[attest] OVERALL PASS")
+			return 0
+		}
+		fmt.Println()
+	}
+
+	// TPM path (default).
 	resp, err := cli.Attest(ctx, &orchpb.AttestRequest{Nonce: nonce})
 	if err != nil {
 		return die(fmt.Errorf("Attest: %w", err))
@@ -96,8 +130,6 @@ func cmdAttest(_ *kit.Kit, args []string) int {
 	fmt.Printf("[attest] response from %s: quote=%dB sig=%dB ak_pub=%dB ek_pub=%dB pcrs=%d event_log=%dB\n",
 		*target, len(resp.Quote), len(resp.Signature),
 		len(resp.AkPub), len(resp.EkPub), len(resp.Pcr), len(resp.EventLog))
-
-	pass := true
 
 	// (a) EK byte match.
 	if *ekPub != "" {
