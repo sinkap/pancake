@@ -276,8 +276,15 @@ is also written by systemd-stub.
       covers the entire layer set for attestation. Hard-fail discipline
       (matching PCR 13) when TPM is present.
 - [x] Remote attestation (`pancake attest`, Step 5) — pancaked
-      provisions a per-boot AK + EK at startup (`tpm2_createek` +
-      `tpm2_createak`). New `Attest(nonce, pcrs[])` RPC returns:
+      provisions a per-boot AK at startup, bound to a stable EK.
+      EK lifecycle follows the TCG TPM 2.0 EK Credential Profile:
+      `pancake enroll` runs `tpm2_createek` + `tpm2_evictcontrol`
+      to persist the EK at canonical handle `0x81010002` (idempotent;
+      re-running on the same TPM is a no-op). pancaked startup
+      then does `tpm2_readpublic -c 0x81010002` (instant, no key
+      derivation), with a fallback to transient `tpm2_createek`
+      for hosts not yet enrolled. AK is fresh per boot via
+      `tpm2_createak`. New `Attest(nonce, pcrs[])` RPC returns:
       tpm2_quote bytes + ECDSA signature, AK + EK pubkeys, AK name,
       per-PCR digests, raw `pcrs.bin`, and the firmware event log.
       `pancake enroll` now also exports `/etc/pancake/ek.pub` (EK

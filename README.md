@@ -340,8 +340,18 @@ pancake orchestrate push --target VM:7878 --kit ./kit --gen-id N \
 
 ### Remote attestation (`pancake attest`)
 
-`pancaked` provisions a per-boot AK + EK at startup and exposes an
-`Attest(nonce, pcrs[])` RPC. On the operator side, `pancake attest`
+`pancaked` provisions a fresh AK at every startup, bound to the
+machine's stable EK. The EK lifecycle follows the TCG TPM 2.0 EK
+Credential Profile: `pancake enroll` persists the EK at the
+canonical handle `0x81010002` (`tpm2_createek` + `tpm2_evictcontrol`,
+idempotent across re-enrolls); subsequent `pancaked` startups load
+it instantly via `tpm2_readpublic`. The EK is deterministic from
+the TPM's endorsement seed, so it survives reboots, rotates only
+on `tpm2_clear` / hardware swap.
+
+The Attest RPC returns: TPM2 quote + signature, AK pub, EK pub,
+AK name (for credential activation), per-PCR digests, raw `pcrs.bin`,
+and the firmware event log. On the operator side, `pancake attest`
 runs five checks against the response:
 
 ```sh
