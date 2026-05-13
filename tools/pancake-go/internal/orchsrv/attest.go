@@ -20,14 +20,25 @@ import (
 // layer set (14) — enough for "is this VM running gen N?".
 var defaultPCRs = []int32{7, 11, 12, 13, 14}
 
+// ekHandle is the TCG TPM 2.0 EK Credential Profile-defined
+// persistent handle for the ECC EK. We expect `pancake enroll` to
+// have promoted the EK there once already (tpm2_evictcontrol),
+// so startup is a fast tpm2_readpublic instead of re-derivation.
+const ekHandle = "0x81010002"
+
 // attestState holds the per-boot TPM2 attestation context. Created
 // once at pancaked startup; lives in /run (tmpfs) so it disappears
 // on reboot, matching the per-boot AK lifecycle the verifier
 // expects.
+//
+// EK lifecycle: persistent at handle 0x81010002 (set up by
+// `pancake enroll` once per TPM). On first boot before enrollment,
+// we fall back to a transient EK via tpm2_createek so attestation
+// works pre-enroll; the daemon logs which path it took.
 type attestState struct {
 	dir    string // /run/pancake/attest
-	ekCtx  string // .../ek.ctx — primary EK context blob
-	ekPub  []byte // contents of .../ek.pub — TPM2B_PUBLIC, exported via Attest
+	ekRef  string // either ekHandle ("0x81010002") or path to ek.ctx
+	ekPub  []byte // contents of ek.pub — TPM2B_PUBLIC, exported via Attest
 	akCtx  string // .../ak.ctx — AK context blob (used by tpm2_quote)
 	akPub  []byte // contents of .../ak.pub — TPM2B_PUBLIC
 	akName []byte // contents of .../ak.name — name digest
@@ -62,24 +73,47 @@ func setupAttest() (*attestState, error) {
 	}
 	st := &attestState{
 		dir:   dir,
-		ekCtx: filepath.Join(dir, "ek.ctx"),
 		akCtx: filepath.Join(dir, "ak.ctx"),
 	}
 	ekPubPath := filepath.Join(dir, "ek.pub")
 	akPubPath := filepath.Join(dir, "ak.pub")
 	akNamePath := filepath.Join(dir, "ak.name")
 
-	if err := runner.Run(runner.Cmd{
-		Argv: []string{"tpm2_createek",
-			"-G", "ecc",
-			"-u", ekPubPath,
-			"-c", st.ekCtx},
-	}); err != nil {
-		return nil, fmt.Errorf("attest: tpm2_createek: %w", err)
+	// Prefer the persistent EK at the canonical handle (set up once
+	// by `pancake enroll`). Falls back to transient createek for
+	// pre-enrolled hosts so attestation still works on first boot.
+	if err := runner.RunOK(runner.Cmd{
+		Argv: []string{"tpm2_readpublic",
+			"-c", ekHandle, "-o", ekPubPath},
+	}); err == nil {
+		if fi, statErr := os.Stat(ekPubPath); statErr == nil && fi.Size() > 0 {
+			st.ekRef = ekHandle
+			fmt.Fprintf(os.Stderr,
+				"[pancaked] EK loaded from persistent handle %s\n", ekHandle)
+		}
 	}
+	if st.ekRef == "" {
+		// Fallback: create a transient EK. Same key bytes (deterministic
+		// from EPS), just costs ~10–50 ms. Operator should run
+		// `pancake enroll` to promote it to persistent.
+		ekCtx := filepath.Join(dir, "ek.ctx")
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"tpm2_createek",
+				"-G", "ecc",
+				"-u", ekPubPath,
+				"-c", ekCtx},
+		}); err != nil {
+			return nil, fmt.Errorf("attest: tpm2_createek: %w", err)
+		}
+		st.ekRef = ekCtx
+		fmt.Fprintln(os.Stderr,
+			"[pancaked] EK created transient (handle "+ekHandle+
+				" empty — run `pancake enroll` to persist)")
+	}
+
 	if err := runner.Run(runner.Cmd{
 		Argv: []string{"tpm2_createak",
-			"-C", st.ekCtx,
+			"-C", st.ekRef,
 			"-G", "ecc",
 			"-g", "sha256",
 			"-s", "ecdsa",
@@ -245,7 +279,7 @@ func (s *server) ActivateCredential(
 	if err := runner.Run(runner.Cmd{
 		Argv: []string{"tpm2_activatecredential",
 			"-c", s.attest.akCtx,
-			"-C", s.attest.ekCtx,
+			"-C", s.attest.ekRef, // persistent handle or fallback ctx path
 			"-i", blobPath,
 			"-o", secretPath,
 			"-P", "session:" + sessionPath},

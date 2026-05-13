@@ -31,7 +31,21 @@ import (
 	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
 )
 
-const defaultSealedTokenPath = "/etc/pancake/orch-token.creds"
+const (
+	defaultSealedTokenPath = "/etc/pancake/orch-token.creds"
+
+	// ekHandle is the TCG TPM 2.0 EK Credential Profile-defined
+	// persistent handle for the ECC EK (RSA EK lives at 0x81010001).
+	// Promoting our EK there once at enroll-time means every
+	// pancaked startup is just a tpm2_readpublic — no per-boot
+	// re-derivation via tpm2_createek.
+	ekHandle = "0x81010002"
+)
+
+func fileExistsNonEmpty(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Size() > 0
+}
 
 func cmdEnroll(_ *kit.Kit, args []string) int {
 	fs := flag.NewFlagSet("enroll", flag.ContinueOnError)
@@ -115,11 +129,13 @@ func cmdEnroll(_ *kit.Kit, args []string) int {
 			*out, *pcrs)
 	}
 
-	// EK export. Same operator action also dumps the endorsement key
-	// public area so the orchestrator's attestation registry can
-	// recognize this host. EK is durable across reboots (anchored to
-	// the TPM endorsement seed); export-once, ship-once, valid until
-	// the TPM is reset.
+	// EK export + persistence. Same operator action also dumps the
+	// endorsement key public area (for the orchestrator's attestation
+	// registry) AND promotes the EK to its TCG-canonical persistent
+	// handle so subsequent pancaked startups can do tpm2_readpublic
+	// instead of re-deriving via tpm2_createek every boot. EK is
+	// durable across reboots (anchored to the TPM endorsement seed):
+	// export-once, ship-once, valid until the TPM is cleared.
 	if err := os.MkdirAll(filepath.Dir(*ekOut), 0o755); err != nil {
 		return die(err)
 	}
@@ -129,14 +145,41 @@ func cmdEnroll(_ *kit.Kit, args []string) int {
 	}
 	defer os.RemoveAll(tmpDir)
 	ekCtx := filepath.Join(tmpDir, "ek.ctx")
-	if err := runner.Run(runner.Cmd{
-		Argv: []string{"tpm2_createek",
-			"-G", "ecc",
-			"-u", *ekOut,
-			"-c", ekCtx},
+
+	// If the EK is already at the persistent handle from a prior
+	// enroll on the same TPM, just read it out — same bytes, same
+	// identity. Skips the createek+evictcontrol dance.
+	if err := runner.RunOK(runner.Cmd{
+		Argv: []string{"tpm2_readpublic",
+			"-c", ekHandle, "-o", *ekOut},
 		Sudo: true,
-	}); err != nil {
-		return die(fmt.Errorf("tpm2_createek: %w", err))
+	}); err == nil && fileExistsNonEmpty(*ekOut) {
+		fmt.Fprintf(os.Stderr,
+			"[enroll] EK already at persistent handle %s; pubkey re-exported to %s\n",
+			ekHandle, *ekOut)
+	} else {
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"tpm2_createek",
+				"-G", "ecc",
+				"-u", *ekOut,
+				"-c", ekCtx},
+			Sudo: true,
+		}); err != nil {
+			return die(fmt.Errorf("tpm2_createek: %w", err))
+		}
+		// Promote EK to the TCG-canonical persistent handle.
+		// Endorsement-hierarchy auth is empty by default. Idempotent
+		// in practice: if we got here readpublic above said the
+		// handle was empty, so this is a fresh evict.
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"tpm2_evictcontrol",
+				"-C", "o", "-c", ekCtx, ekHandle},
+			Sudo: true,
+		}); err != nil {
+			return die(fmt.Errorf("tpm2_evictcontrol → %s: %w", ekHandle, err))
+		}
+		fmt.Fprintf(os.Stderr,
+			"[enroll] EK created and persisted at handle %s\n", ekHandle)
 	}
 	fmt.Fprintf(os.Stderr,
 		"[enroll] EK public area written to %s\n"+
