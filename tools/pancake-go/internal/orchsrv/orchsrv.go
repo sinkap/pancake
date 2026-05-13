@@ -17,13 +17,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/deb"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/layer"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/orchpb"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/runner"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/sandbox"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/sign"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/deb"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/layer"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/sandbox"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -86,6 +86,14 @@ func Serve(o Opts) error {
 			"[pancaked] auth token unsealed from TPM (PCR-bound to current boot chain)")
 	}
 
+	// Provision per-boot attestation context (AK + EK). Soft-fails on
+	// no-TPM systems; the daemon still serves Update / GetCurrentManifest.
+	ast, err := setupAttest()
+	if err != nil {
+		return fmt.Errorf("setup attest: %w", err)
+	}
+	srv.attest = ast
+
 	lis, err := net.Listen("tcp", o.Listen)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", o.Listen, err)
@@ -104,7 +112,8 @@ type server struct {
 	orchpb.UnimplementedPancakeServer
 	k      *kit.Kit
 	pubkey string
-	token  string // empty = no auth
+	token  string       // empty = no auth
+	attest *attestState // nil = no TPM, Attest RPC returns Unavailable
 }
 
 func (s *server) authInterceptor(ctx context.Context, req any,

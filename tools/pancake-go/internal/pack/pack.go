@@ -14,7 +14,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
 )
 
 // Disk turns kitDir into a single ext4 image at outImg.

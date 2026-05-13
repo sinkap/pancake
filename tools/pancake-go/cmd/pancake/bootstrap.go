@@ -24,22 +24,25 @@
 package main
 
 import (
+	"encoding/binary"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
 
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/deb"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/efi"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/initramfs"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/layer"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/pack"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/runner"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/sign"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/deb"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/efi"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/initramfs"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/layer"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/pack"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/recipe"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
 )
 
 // SystemBaseline is what mmdebstrap minbase doesn't pull but pancake-os
@@ -52,7 +55,13 @@ var SystemBaseline = []string{
 	"udev",
 	"dbus",
 	"iproute2", "iputils-ping",
-	"ca-certificates", "netbase",
+	"netbase",
+	// ca-certificates intentionally NOT in baseline: nothing in
+	// pancake-os validates TLS against the public CA store. Trust
+	// model is the kit's own signing key (baked at
+	// /etc/pancake/manifest.pubkey), TPM-sealed bearer tokens for
+	// orchestrator auth, and authorized_keys for SSH. Re-add only
+	// when a future feature needs to verify a public TLS endpoint.
 	"kmod",
 	"cryptsetup-bin", "dmsetup",
 	"openssh-client",
@@ -125,18 +134,74 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			"Default: sibling of --pancake-bin / this executable. The layer "+
 			"includes /usr/sbin/pancaked + the systemd unit so the daemon "+
 			"auto-starts at boot.")
+	builder := fs.String("builder", "",
+		"address of a pancake-build-server to delegate per-package + base layer "+
+			"building to (e.g. localhost:7879). Empty = build everything "+
+			"locally as today. v1: pancake-host + pancake-kernel/modules "+
+			"still build client-side regardless of this flag.")
 
-	// bootstrap has no positional args; every flag carries a value, so the
-	// splitFlagsAndPositionals helper would incorrectly demote those values
-	// to "positionals". Direct Parse handles "--foo VAL" cleanly.
+	// One optional positional: a recipe TOML path. If absent, look for
+	// ./pancake-recipe.toml; if THAT's absent, fall back to flag-only.
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	recipePath := fs.Arg(0)
+	if recipePath == "" {
+		if _, err := os.Stat(recipe.DefaultRecipePath); err == nil {
+			recipePath = recipe.DefaultRecipePath
+			fmt.Fprintf(os.Stderr,
+				"[bootstrap] using default recipe %s (override with positional arg)\n",
+				recipePath)
+		}
+	}
+
+	// CLI flags override recipe values. fs.Visit reports flags actually
+	// set by the user (NOT defaulted), so we know whose values to keep.
+	flagSet := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { flagSet[f.Name] = true })
+
+	if recipePath != "" {
+		r, err := recipe.Load(recipePath)
+		if err != nil {
+			return die(fmt.Errorf("recipe %s: %w", recipePath, err))
+		}
+		applyRecipeDefaults(r, flagSet,
+			suite, mirror, pkgs, out, hostname, keepSandbox,
+			sshHostKeys, sshAuthKeys, pancakeBin, pancakedBin, srcRoot,
+			image, initramfsPath, kernel, bzimage, bzimageOut,
+			efiOut, cmdline, signKey, signCert)
+	}
+
+	// Sentinel kernel versions: "tree" / "local" mean "read it out of
+	// --bzimage" — handy in recipes that pin a kernel tree but don't
+	// want to repeat the version string.
+	if *kernel == "tree" || *kernel == "local" {
+		if *bzimage == "" {
+			return die(fmt.Errorf(
+				"--kernel=%s requires --bzimage to be set", *kernel))
+		}
+		v, err := extractBzImageVersion(*bzimage)
+		if err != nil {
+			return die(fmt.Errorf("extract version from %s: %w", *bzimage, err))
+		}
+		fmt.Fprintf(os.Stderr,
+			"[bootstrap] --kernel=%s → %s (from %s)\n", *kernel, v, *bzimage)
+		*kernel = v
+	}
+
 	if *out == "" || *pkgs == "" {
 		fmt.Fprintln(os.Stderr,
-			"usage: pancake bootstrap --packages a,b,c --output DIR [flags]")
+			"usage:\n"+
+				"  pancake bootstrap [recipe.toml] [--flag=value ...]\n"+
+				"  pancake bootstrap --packages a,b,c --output DIR [other flags]\n"+
+				"\n"+
+				"recipe is auto-loaded from ./pancake-recipe.toml if present.")
 		return 2
 	}
+
+	fmt.Fprintf(os.Stderr,
+		"[bootstrap] resolved: output=%s hostname=%s suite=%s kernel=%s\n",
+		*out, *hostname, *suite, *kernel)
 
 	if err := bootstrap(bootstrapArgs{
 		Suite:           *suite,
@@ -159,10 +224,109 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		SignKey:         *signKey,
 		SignCert:        *signCert,
 		PancakedBin:     *pancakedBin,
+		BuilderAddr:     *builder,
 	}); err != nil {
 		return die(err)
 	}
 	return 0
+}
+
+// applyRecipeDefaults overrides any string/bool flag value that the user
+// did NOT explicitly set on the command line with the corresponding value
+// from the recipe (if non-empty). Precedence: CLI flag > recipe > flag's
+// own default.
+//
+// 21 flags = 21 lines of explicit if-then. Verbose but unambiguous; a
+// reflection-based version would obscure the precedence rule.
+func applyRecipeDefaults(r *recipe.Recipe, flagSet map[string]bool,
+	suite, mirror, pkgs, out, hostname *string, keepSandbox *bool,
+	sshHostKeys, sshAuthKeys, pancakeBin, pancakedBin, srcRoot *string,
+	image, initramfsPath, kernel, bzimage, bzimageOut, efiOut,
+	cmdline, signKey, signCert *string) {
+	set := func(name, recipeVal string, dst *string) {
+		if !flagSet[name] && recipeVal != "" {
+			*dst = recipeVal
+		}
+	}
+	setBool := func(name string, recipeVal bool, dst *bool) {
+		if !flagSet[name] && recipeVal {
+			*dst = recipeVal
+		}
+	}
+
+	// Top-level
+	set("output", r.Output, out)
+	set("hostname", r.Hostname, hostname)
+	if !flagSet["packages"] && len(r.Packages) > 0 {
+		*pkgs = strings.Join(r.Packages, ",")
+	}
+
+	// [distro]
+	set("suite", r.Distro.Suite, suite)
+	set("mirror", r.Distro.Mirror, mirror)
+
+	// [ssh]
+	set("ssh-authorized-keys", r.SSH.AuthorizedKeys, sshAuthKeys)
+	set("ssh-host-keys", r.SSH.HostKeysDir, sshHostKeys)
+
+	// [kernel]
+	set("kernel", r.Kernel.Version, kernel)
+	set("bzimage", r.Kernel.BzImage, bzimage)
+	set("cmdline", r.Kernel.Cmdline, cmdline)
+
+	// [outputs]
+	set("image", r.Outputs.Image, image)
+	set("initramfs", r.Outputs.Initramfs, initramfsPath)
+	set("bzimage-out", r.Outputs.BzImage, bzimageOut)
+	set("efi", r.Outputs.EFI, efiOut)
+
+	// [signing]
+	set("sign-key", r.Signing.Key, signKey)
+	set("sign-cert", r.Signing.Cert, signCert)
+
+	// [advanced]
+	setBool("keep-sandbox", r.Advanced.KeepSandbox, keepSandbox)
+	set("src-root", r.Advanced.SrcRoot, srcRoot)
+	set("pancake-bin", r.Advanced.PancakeBin, pancakeBin)
+	set("pancaked-bin", r.Advanced.PancakedBin, pancakedBin)
+}
+
+// extractBzImageVersion reads the version string embedded in an x86
+// bzImage. The setup header at byte 0x20E holds a u16 whose value plus
+// 0x200 is the file offset of a NUL-terminated version string of the
+// form "<release> (<builder>@<host>) #N SMP ..." — we keep the first
+// whitespace-delimited token. See Documentation/x86/boot.rst,
+// kernel_version field.
+func extractBzImageVersion(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	var hdr [0x210]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		return "", fmt.Errorf("read setup header: %w", err)
+	}
+	if string(hdr[0x202:0x206]) != "HdrS" {
+		return "", fmt.Errorf("not a bzImage (no HdrS magic at 0x202)")
+	}
+	off := int64(binary.LittleEndian.Uint16(hdr[0x20E:0x210])) + 0x200
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return "", err
+	}
+	buf := make([]byte, 256)
+	n, _ := f.Read(buf)
+	end := n
+	for i, c := range buf[:n] {
+		if c == 0 || c == ' ' || c == '\t' || c == '\n' {
+			end = i
+			break
+		}
+	}
+	if end == 0 {
+		return "", fmt.Errorf("empty version string at offset 0x%x", off)
+	}
+	return string(buf[:end]), nil
 }
 
 // currentKVer returns uname -r for the running host, used as the default
@@ -216,9 +380,16 @@ type bootstrapArgs struct {
 	// to a sibling of PancakeBin (or this executable). Goes into its own
 	// "pancaked" verity layer alongside the systemd unit.
 	PancakedBin string
+	// BuilderAddr: when non-empty, delegate per-package + base layer
+	// building to this pancake-build-server over gRPC. See
+	// bootstrap_builder.go for the alternate code path.
+	BuilderAddr string
 }
 
 func bootstrap(a bootstrapArgs) error {
+	if a.BuilderAddr != "" {
+		return bootstrapViaBuilder(a)
+	}
 	if err := os.MkdirAll(a.Output, 0o755); err != nil {
 		return err
 	}
@@ -272,9 +443,20 @@ func bootstrap(a bootstrapArgs) error {
 		if err != nil {
 			return err
 		}
+		// Per-host paths (hostname, ssh keys) are carved into the
+		// pancake-host layer; if any package "owns" them (e.g.
+		// base-files ships /etc/hostname) we drop them from BOTH
+		// ownership tracking and staging so the package's roothash
+		// stays the same across the fleet.
+		kept := files[:0]
 		for _, f := range files {
+			if isPerHostPath(f) {
+				continue
+			}
 			ownedPaths[f] = true
+			kept = append(kept, f)
 		}
+		files = kept
 		staging := filepath.Join(tmp, p.Name)
 		if err := deb.StageFiles(sandboxDir, files, staging); err != nil {
 			return err
@@ -324,6 +506,12 @@ func bootstrap(a bootstrapArgs) error {
 			continue
 		}
 		if shouldIgnore(f) {
+			continue
+		}
+		if isPerHostPath(f) {
+			// Goes into pancake-host instead. Common case:
+			// /etc/ssh/ssh_host_*_key generated by openssh-server's
+			// postinst — we replace them with our own.
 			continue
 		}
 		orphans = append(orphans, f)
@@ -387,13 +575,27 @@ func bootstrap(a bootstrapArgs) error {
 		}
 	}
 
+	// Synthetic pancake-host layer: hostname, ssh host keys,
+	// authorized_keys. Carved out of the per-package + pancake-state
+	// layers (see isPerHostPath) so those layers can be shared across
+	// every machine in the fleet — only pancake-host varies per host.
+	{
+		var err error
+		layers, err = packPancakeHostLayer(tmp, repo, layers, a)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Overlay order: leaves (most-specific) first, base last.
-	// pancake-state at the very top so its post-install bits win over
-	// anything a package might re-ship. The synthetic kernel + modules
-	// layers go just below — they own /boot/vmlinuz and
-	// /lib/modules/<ver> exclusively, so order is mostly cosmetic, but
-	// putting them near the top keeps related layers visually adjacent
-	// in `pancake list` output.
+	// pancake-host at the very top so its hostname / ssh keys win over
+	// anything else (e.g. base-files' /etc/hostname). pancake-state
+	// next: post-install bits + the pancake/pancaked CLI runtime win
+	// over any package re-shipping the same paths. The synthetic
+	// kernel + modules layers go just below — they own /boot/vmlinuz
+	// and /lib/modules/<ver> exclusively, so order is mostly cosmetic,
+	// but putting them near the top keeps related layers visually
+	// adjacent in `pancake list` output.
 	byName := map[string]laidOut{}
 	for _, L := range layers {
 		byName[L.Name] = L
@@ -401,6 +603,7 @@ func bootstrap(a bootstrapArgs) error {
 	depFirst := topologicalOrder(pkgs, sandboxDir)
 	var overlay []laidOut
 	for _, name := range []string{
+		"pancake-host",
 		"pancake-state", "pancaked",
 		"pancake-kernel", "pancake-modules",
 	} {
@@ -589,12 +792,16 @@ func mmdebstrap(suite, mirror string, pkgs []string, dest string) error {
 	})
 }
 
-// ignorePatterns mirrors pancake-bootstrap.py: drop runtime + cache state but
-// KEEP /var/lib/dpkg so the booted system can `dpkg-query` what's installed.
+// ignorePatterns: drop runtime + cache state, plus documentation trees
+// the system has no reader for (no `man`, `info`, or doc browser ships
+// in the baseline). KEEPS /var/lib/dpkg so the booted system can
+// `dpkg-query` what's installed.
 var ignorePatterns = []string{
 	"/var/cache/", "/var/log/", "/var/lib/apt/",
 	"/var/lib/systemd/random-seed",
 	"/run/", "/proc/", "/sys/", "/dev/", "/tmp/",
+	"/usr/share/man/", "/usr/share/info/", "/usr/share/doc/",
+	"/var/lib/ucf/",
 }
 
 func shouldIgnore(p string) bool {
@@ -704,7 +911,7 @@ func packPancakedLayer(tmp, repo string, layers []laidOut, a bootstrapArgs) ([]l
 
 	const unit = `[Unit]
 Description=pancake update daemon (orchestrator gRPC receiver)
-Documentation=https://github.com/sinkap/fs-pancake
+Documentation=https://github.com/sinkap/pancake
 After=pancake-state-rw.service
 Requires=pancake-state-rw.service
 
@@ -755,6 +962,389 @@ WantedBy=multi-user.target
 		return layers, err
 	}
 	layers = append(layers, laidOut{"pancaked", "1.0.0", "all", "pancaked"})
+	return layers, nil
+}
+
+// packPancakeRuntimeLayer ships pancake-os defaults that need to take
+// effect on every boot but shouldn't pollute per-host or per-package
+// layers. Contents:
+//
+//   /usr/local/bin/pancake                          ← --pancake-bin
+//   /usr/sbin/mount-overlay                         ← compiled C
+//   /usr/sbin/pivot-root                            ← compiled C
+//   /usr/lib/systemd/system-generators/pancake-defaults
+//   /etc/systemd/system/pancake-state-rw.service    + MUTW symlink
+//   /etc/systemd/system/pancake-debug.service       + MUTW symlink
+//   /etc/pancake/manifest.pubkey                    (when --sign-cert)
+//
+// Why a generator (not a static *.wants symlink in this layer):
+// generators are systemd's native way to express "compute enables
+// at boot time." They run before the unit tree is read, so their
+// symlinks are honored on the first activation of multi-user.target
+// — unlike a unit that calls `systemctl enable`, which only takes
+// effect on the NEXT boot.
+func packPancakeRuntimeLayer(tmp, repo string, layers []laidOut, a bootstrapArgs) ([]laidOut, error) {
+	fmt.Fprintln(os.Stderr,
+		"\n[bootstrap] packing pancake-runtime layer")
+
+	staging := filepath.Join(tmp, "_pancake-runtime")
+	sbinDir := filepath.Join(staging, "usr/sbin")
+	binDir := filepath.Join(staging, "usr/local/bin")
+	genDir := filepath.Join(staging, "usr/lib/systemd/system-generators")
+	unitDir := filepath.Join(staging, "etc/systemd/system")
+	wantsDir := filepath.Join(unitDir, "multi-user.target.wants")
+	for _, d := range []string{sbinDir, binDir, genDir, unitDir, wantsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return layers, err
+		}
+	}
+
+	// 1. systemd generator: enables systemd-networkd at boot.
+	const generator = `#!/bin/sh
+# pancake-defaults: systemd generator. Materializes default unit
+# enables under /run/systemd/generator/ on every boot. Runs before
+# systemd reads the unit tree, so its symlinks are honored on the
+# first activation of multi-user.target.
+#
+# args: $1 normal-dir, $2 early-dir, $3 late-dir
+set -e
+ND="$1"
+mkdir -p "$ND/multi-user.target.wants" "$ND/sockets.target.wants"
+ln -sf /lib/systemd/system/systemd-networkd.service \
+    "$ND/multi-user.target.wants/systemd-networkd.service"
+ln -sf /lib/systemd/system/systemd-networkd.socket \
+    "$ND/sockets.target.wants/systemd-networkd.socket"
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(genDir, "pancake-defaults"),
+		[]byte(generator), 0o755); err != nil {
+		return layers, err
+	}
+
+	// 2. mount-overlay + pivot-root: compile from src, install.
+	srcRoot := a.SrcRoot
+	if srcRoot == "" {
+		if exe, err := os.Executable(); err == nil {
+			srcRoot = filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(exe))))
+		}
+	}
+	for _, pair := range []struct{ src, name string }{
+		{filepath.Join(srcRoot, "initramfs/mount-overlay.c"), "mount-overlay"},
+		{filepath.Join(srcRoot, "pivot-root.c"), "pivot-root"},
+	} {
+		if _, err := os.Stat(pair.src); err != nil {
+			return layers, fmt.Errorf("missing source: %s "+
+				"(use --src-root to override)", pair.src)
+		}
+		tmpBin := filepath.Join("/tmp", "_pancake-runtime-"+pair.name)
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"cc", "-O2", "-Wall", "-Wextra", "-static",
+				"-o", tmpBin, pair.src},
+		}); err != nil {
+			return layers, err
+		}
+		if err := copyFileLocal(tmpBin, filepath.Join(sbinDir, pair.name)); err != nil {
+			return layers, err
+		}
+		if err := os.Chmod(filepath.Join(sbinDir, pair.name), 0o755); err != nil {
+			return layers, err
+		}
+		_ = os.Remove(tmpBin)
+	}
+
+	// 3. pancake CLI binary.
+	bin := a.PancakeBin
+	if bin == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return layers, fmt.Errorf("locate self: %w", err)
+		}
+		bin = exe
+	}
+	if _, err := os.Stat(bin); err != nil {
+		return layers, fmt.Errorf("--pancake-bin: %w", err)
+	}
+	if err := copyFileLocal(bin, filepath.Join(binDir, "pancake")); err != nil {
+		return layers, err
+	}
+	if err := os.Chmod(filepath.Join(binDir, "pancake"), 0o755); err != nil {
+		return layers, err
+	}
+
+	// 4. systemd units: pancake-state-rw + pancake-debug, both
+	// pre-enabled via the multi-user.target.wants symlinks shipped
+	// in this layer.
+	const stateRwUnit = `[Unit]
+Description=Remount /var/lib/pancake read-write for pancake CLI
+DefaultDependencies=no
+ConditionPathIsMountPoint=/var/lib/pancake
+After=local-fs.target
+Before=multi-user.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/mount -o remount,rw /var/lib/pancake
+[Install]
+WantedBy=multi-user.target
+`
+	if err := os.WriteFile(filepath.Join(unitDir, "pancake-state-rw.service"),
+		[]byte(stateRwUnit), 0o644); err != nil {
+		return layers, err
+	}
+	if err := os.Symlink(
+		"/etc/systemd/system/pancake-state-rw.service",
+		filepath.Join(wantsDir, "pancake-state-rw.service")); err != nil {
+		return layers, err
+	}
+
+	const debugUnit = `[Unit]
+Description=pancake-os end-of-boot diagnostic dump
+DefaultDependencies=no
+After=multi-user.target
+[Service]
+Type=oneshot
+StandardOutput=journal+console
+ExecStart=/bin/sh -c 'echo === PANCAKE DEBUG ===; echo --- ip ---; ip -4 addr 2>&1 | head -10; echo --- ss listening ---; ss -tlnp 2>&1 | head; echo --- ssh status ---; systemctl status ssh.socket ssh.service --no-pager -l 2>&1 | head -20; echo === END DEBUG ==='
+[Install]
+WantedBy=multi-user.target
+`
+	if err := os.WriteFile(filepath.Join(unitDir, "pancake-debug.service"),
+		[]byte(debugUnit), 0o644); err != nil {
+		return layers, err
+	}
+	if err := os.Symlink(
+		"/etc/systemd/system/pancake-debug.service",
+		filepath.Join(wantsDir, "pancake-debug.service")); err != nil {
+		return layers, err
+	}
+
+	// 5. Optional manifest pubkey for in-VM verification of pushed
+	// generation manifests by `pancake` / pancaked.
+	if a.SignCert != "" {
+		etcPancake := filepath.Join(staging, "etc/pancake")
+		if err := os.MkdirAll(etcPancake, 0o755); err != nil {
+			return layers, err
+		}
+		tmpPub := filepath.Join("/tmp", "_pancake-runtime-pubkey.pem")
+		if err := signPubkeyFromCert(a.SignCert, tmpPub); err != nil {
+			return layers, err
+		}
+		defer os.Remove(tmpPub)
+		if err := copyFileLocal(tmpPub,
+			filepath.Join(etcPancake, "manifest.pubkey")); err != nil {
+			return layers, err
+		}
+	}
+
+	pkgDir := filepath.Join(repo, "pancake-runtime")
+	if _, err := os.Stat(pkgDir); err == nil {
+		_ = runner.Run(runner.Cmd{
+			Argv: []string{"rm", "-rf", pkgDir}, Sudo: true,
+		})
+	}
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		return layers, err
+	}
+	roothash, dataSize, err := layer.MakeVerity(staging,
+		filepath.Join(pkgDir, "image.img"), "pancake-runtime", 0,
+		"pancake-runtime")
+	if err != nil {
+		return layers, err
+	}
+	if err := kit.WritePackageManifest(pkgDir, kit.PackageManifest{
+		Package: kit.PackageBlock{
+			Name: "pancake-runtime", Version: "1.0.0", Arch: "all",
+			Description: "pancake-os runtime defaults (systemd generator + boot-time policy)",
+		},
+		Image: kit.ImageBlock{DataSize: dataSize, Roothash: roothash},
+	}); err != nil {
+		return layers, err
+	}
+	layers = append(layers, laidOut{"pancake-runtime", "1.0.0", "all", "pancake-runtime"})
+	return layers, nil
+}
+
+// isPerHostPath reports whether p is a path that should live exclusively
+// in the pancake-host layer. Used to filter both per-package staging
+// (so packages don't include host-specific content in their roothash)
+// and the pancake-state orphan loop (so postinst-generated ssh host
+// keys don't end up in pancake-state). The matching set is small and
+// path-prefix; if you add anything here, add the corresponding write
+// to packPancakeHostLayer.
+func isPerHostPath(p string) bool {
+	switch p {
+	case "/etc/hostname",
+		"/root/.ssh",
+		"/root/.ssh/authorized_keys":
+		return true
+	}
+	return strings.HasPrefix(p, "/etc/ssh/ssh_host_")
+}
+
+// packPancakeHostLayer synthesizes the per-host verity layer: hostname,
+// ssh host keys, root authorized_keys. Produced fresh from the recipe /
+// CLI args — never sourced from the mmdebstrap sandbox — so the rest of
+// the kit is bit-identical across machines that bootstrap from the same
+// recipe.
+//
+// Path → source:
+//
+//	/etc/hostname                        → a.Hostname
+//	/etc/ssh/ssh_host_*_key{,.pub}       → a.SSHHostKeysDir, else generated
+//	/root/.ssh/                          → mode 0700 (always)
+//	/root/.ssh/authorized_keys           → a.SSHAuthKeysFile (skipped if empty)
+//
+// The layer sits at the very top of the overlay stack so its files win
+// over base-files' /etc/hostname and any keys openssh-server's postinst
+// may have generated into the per-package layer.
+func packPancakeHostLayer(tmp, repo string, layers []laidOut, a bootstrapArgs) ([]laidOut, error) {
+	fmt.Fprintln(os.Stderr,
+		"\n[bootstrap] packing pancake-host layer (hostname + ssh identity)")
+
+	staging := filepath.Join(tmp, "_pancake-host")
+	etcSSH := filepath.Join(staging, "etc/ssh")
+	rootSSH := filepath.Join(staging, "root/.ssh")
+	for _, d := range []string{filepath.Join(staging, "etc"), etcSSH, rootSSH} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return layers, err
+		}
+	}
+	// /root and /root/.ssh need 0700 so sshd accepts authorized_keys.
+	if err := os.Chmod(filepath.Join(staging, "root"), 0o700); err != nil {
+		return layers, err
+	}
+	if err := os.Chmod(rootSSH, 0o700); err != nil {
+		return layers, err
+	}
+
+	// /etc/hostname (always — there's a default of "pancake").
+	hostname := a.Hostname
+	if hostname == "" {
+		hostname = "pancake"
+	}
+	if err := os.WriteFile(filepath.Join(staging, "etc/hostname"),
+		[]byte(hostname+"\n"), 0o644); err != nil {
+		return layers, err
+	}
+	fmt.Fprintf(os.Stderr, "  hostname → %s\n", hostname)
+
+	// SSH host keys: copy from --ssh-host-keys, else generate fresh.
+	if a.SSHHostKeysDir != "" {
+		fmt.Fprintf(os.Stderr, "  ssh host keys ← %s\n", a.SSHHostKeysDir)
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"sh", "-c",
+				fmt.Sprintf("cp -a %s/ssh_host_* %s/",
+					a.SSHHostKeysDir, etcSSH)},
+		}); err != nil {
+			return layers, err
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "  generating fresh ssh host keys\n")
+		for _, kt := range []string{"rsa", "ecdsa", "ed25519"} {
+			kf := filepath.Join(etcSSH, "ssh_host_"+kt+"_key")
+			if err := runner.Run(runner.Cmd{
+				Argv: []string{"ssh-keygen", "-q", "-N", "", "-t", kt, "-f", kf},
+			}); err != nil {
+				return layers, err
+			}
+		}
+	}
+	if err := runner.Run(runner.Cmd{
+		Argv: []string{"sh", "-c",
+			fmt.Sprintf("chmod 600 %s/ssh_host_*_key && chmod 644 %s/ssh_host_*_key.pub",
+				etcSSH, etcSSH)},
+	}); err != nil {
+		return layers, err
+	}
+
+	// /root/.ssh/authorized_keys (only when --ssh-authorized-keys set).
+	if a.SSHAuthKeysFile != "" {
+		if fi, err := os.Stat(a.SSHAuthKeysFile); err != nil || fi.IsDir() {
+			return layers, fmt.Errorf("--ssh-authorized-keys: not a file: %s",
+				a.SSHAuthKeysFile)
+		}
+		fmt.Fprintf(os.Stderr, "  /root/.ssh/authorized_keys ← %s\n",
+			a.SSHAuthKeysFile)
+		if err := copyFileLocal(a.SSHAuthKeysFile,
+			filepath.Join(rootSSH, "authorized_keys")); err != nil {
+			return layers, err
+		}
+		if err := os.Chmod(filepath.Join(rootSSH, "authorized_keys"),
+			0o600); err != nil {
+			return layers, err
+		}
+	}
+
+	// /etc/ssh/sshd_config: pancake-os baseline. The .deb-shipped one
+	// is a debconf stub we don't want; openssh-server's sshd_config.d/*
+	// is NOT included unless we write the include line ourselves.
+	const sshdConf = `# /etc/ssh/sshd_config — pancake-os baseline (pancake-host layer)
+Port 22
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+ChallengeResponseAuthentication no
+UsePAM no
+UseDNS no
+GSSAPIAuthentication no
+X11Forwarding no
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+`
+	if err := os.WriteFile(filepath.Join(etcSSH, "sshd_config"),
+		[]byte(sshdConf), 0o644); err != nil {
+		return layers, err
+	}
+
+	// /etc/resolv.conf: hardcoded for QEMU's user-mode-net DNS.
+	if err := os.WriteFile(filepath.Join(staging, "etc/resolv.conf"),
+		[]byte("nameserver 10.0.2.3\n"), 0o644); err != nil {
+		return layers, err
+	}
+
+	// /etc/systemd/network/10-wired.network: DHCP via systemd-networkd.
+	netDir := filepath.Join(staging, "etc/systemd/network")
+	if err := os.MkdirAll(netDir, 0o755); err != nil {
+		return layers, err
+	}
+	if err := os.WriteFile(filepath.Join(netDir, "10-wired.network"),
+		[]byte("[Match]\nType=ether\n[Network]\nDHCP=yes\n"), 0o644); err != nil {
+		return layers, err
+	}
+
+	// systemd-networkd's wants symlinks are created at boot by /init
+	// in the tmpfs upper — see initramfs/init's "default enables"
+	// block. Keeps pancake-host purely about identity, not policy.
+
+	pkgDir := filepath.Join(repo, "pancake-host")
+	if _, err := os.Stat(pkgDir); err == nil {
+		_ = runner.Run(runner.Cmd{
+			Argv: []string{"rm", "-rf", pkgDir}, Sudo: true,
+		})
+	}
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		return layers, err
+	}
+	roothash, dataSize, err := layer.MakeVerity(staging,
+		filepath.Join(pkgDir, "image.img"), "pancake-host", 0, "pancake-host")
+	if err != nil {
+		return layers, err
+	}
+	if err := kit.WritePackageManifest(pkgDir, kit.PackageManifest{
+		Package: kit.PackageBlock{
+			Name: "pancake-host", Version: "1.0.0", Arch: "all",
+			Description: "per-host identity (hostname, ssh keys, authorized_keys)",
+		},
+		Image: kit.ImageBlock{DataSize: dataSize, Roothash: roothash},
+	}); err != nil {
+		return layers, err
+	}
+	layers = append(layers, laidOut{"pancake-host", "1.0.0", "all", "pancake-host"})
 	return layers, nil
 }
 

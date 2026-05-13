@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/orchpb"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"

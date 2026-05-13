@@ -16,11 +16,11 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/deb"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/layer"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/runner"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/sandbox"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/deb"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/layer"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/sandbox"
 )
 
 func cmdInstall(k *kit.Kit, args []string) int {

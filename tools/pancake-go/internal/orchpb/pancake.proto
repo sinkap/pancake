@@ -17,7 +17,7 @@ syntax = "proto3";
 
 package pancake.v1;
 
-option go_package = "github.com/sinkap/fs-pancake/tools/pancake-go/internal/orchpb";
+option go_package = "github.com/sinkap/pancake/tools/pancake-go/internal/orchpb";
 
 service Pancake {
   // GetCurrentManifest returns the manifest of the generation that
@@ -33,6 +33,30 @@ service Pancake {
   // failed apply leaves no observable change, and a successful apply
   // costs nothing until explicitly activated.
   rpc Update(Manifest) returns (UpdateResponse);
+
+  // Attest produces a TPM2 quote over the requested PCRs, signed by
+  // the per-boot AK that pancaked provisioned at startup. Verifier:
+  //   - validates quote signature against AttestResponse.ak_pub
+  //   - confirms AK ownership against EK (compare ek_pub to the
+  //     value enrolled at `pancake enroll` time; optionally run
+  //     credential activation for cryptographic binding)
+  //   - compares PCR digests against expected (computed from the
+  //     generation manifest the verifier knows it pushed)
+  // Returns Unavailable if the host has no TPM (then attestation is
+  // off and the orchestrator falls back to other trust signals).
+  rpc Attest(AttestRequest) returns (AttestResponse);
+
+  // ActivateCredential cryptographically proves the AK lives in the
+  // same TPM as the enrolled EK. Verifier flow:
+  //   1. Get AK pub + EK pub + AK name from a prior Attest()
+  //   2. Generate a random secret S
+  //   3. tpm2_makecredential -e ek.pub -n ak.name -s S -o blob
+  //   4. ActivateCredential(blob) → S' from the VM's TPM
+  //   5. If S == S' the AK is bound to that EK (the encryption is
+  //      keyed to AK.name, only an activation by a TPM holding both
+  //      EK and AK can produce the original secret).
+  rpc ActivateCredential(ActivateCredentialRequest)
+      returns (ActivateCredentialResponse);
 }
 
 message GetCurrentManifestRequest {}
@@ -61,4 +85,73 @@ message UpdateResponse {
   // error is a human-readable error if the update failed for any other
   // reason (signature verification, counter rollback, parse failure).
   string error = 3;
+}
+
+message AttestRequest {
+  // Caller-supplied freshness nonce. The TPM signs (PCRs || nonce)
+  // so a verifier can confirm the quote was generated for THIS
+  // request, not replayed. Must be >= 8 bytes; 32 bytes recommended.
+  bytes nonce = 1;
+
+  // PCR indices to quote. Empty = the pancake-os defaults
+  // {7, 11, 12, 13, 14}. Algorithm is sha256 (the only bank
+  // pancake-os relies on today).
+  repeated int32 pcrs = 2;
+}
+
+message AttestResponse {
+  // Raw TPM2_Quote output: an attestation structure (TPMS_ATTEST)
+  // covering nonce + PCR composite + clock + firmware version.
+  bytes quote = 1;
+  // ECDSA signature over `quote`, made with AK.
+  bytes signature = 2;
+
+  // AK public area (TPM2B_PUBLIC marshalled). Verifier uses this
+  // to check `signature`.
+  bytes ak_pub = 3;
+  // EK public area (TPM2B_PUBLIC). Verifier compares against the
+  // value enrolled at `pancake enroll` time. For full binding, the
+  // verifier can run a credential-activation roundtrip with this EK
+  // and confirm the AK is in the same TPM (skipped in v1 — caller
+  // chooses the trust depth).
+  bytes ek_pub = 4;
+
+  // PCR digests, in the same order as request.pcrs (or the default
+  // set if request.pcrs was empty). For sha256 these are 32 bytes
+  // each. Carried in addition to the quote so verifiers can
+  // diff against expected without parsing the quote.
+  message PcrDigest {
+    int32 index = 1;
+    bytes sha256 = 2;
+  }
+  repeated PcrDigest pcr = 5;
+
+  // Raw TPM2 event log from /sys/kernel/security/tpm0/binary_bios_measurements,
+  // for interpreting PCR 11 (UKI sections measured by systemd-stub)
+  // and our own PCR 13/14 extends. Optional — empty if the kernel
+  // doesn't expose securityfs.
+  bytes event_log = 6;
+
+  // The exact pcrs.bin file tpm2_quote -o produced server-side: a
+  // tpm2-tools-format blob (count of selections + selection bitmaps +
+  // digests). We ship it verbatim so verifiers can pass it straight
+  // to `tpm2_checkquote -f` without reconstructing the format.
+  bytes pcrs_bin = 7;
+
+  // AK name (TPM2B_NAME — alg + digest of AK pub area). Verifiers
+  // bind credential-activation challenges to this name with
+  // tpm2_makecredential -n.
+  bytes ak_name = 8;
+}
+
+message ActivateCredentialRequest {
+  // tpm2_makecredential output: an encrypted blob bound to the AK
+  // name + EK. Only a TPM holding both can decrypt.
+  bytes blob = 1;
+}
+
+message ActivateCredentialResponse {
+  // The decrypted secret. Compare to the original on the verifier
+  // side — match proves AK ↔ EK binding.
+  bytes secret = 1;
 }

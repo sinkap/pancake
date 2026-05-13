@@ -12,15 +12,17 @@ style: |
   table { font-size: 0.9em; margin: 10px auto; }
   th, td { padding: 6px 12px; }
   .small { font-size: 18px; color: #666; }
+  .right { text-align: right; }
 ---
 
 <!-- _class: lead -->
 
-# FS Pancake: Atomic Updates
+# pancake-os
+## image-based Linux · atomic updates · remote attestation
 
 <br>
 
-KP Singh · [github.com/sinkap](https://github.com/sinkap)
+KP Singh · [github.com/sinkap/pancake](https://github.com/sinkap/pancake)
 
 ---
 
@@ -30,65 +32,103 @@ KP Singh · [github.com/sinkap](https://github.com/sinkap)
             ┌──────────────────────────────────┐
             │  upperdir  (tmpfs, ephemeral)    │  writes
             ├──────────────────────────────────┤
-       /    │  sshd-v1     (dm-verity ext4)    │  lowerdir, leftmost wins
+       /    │  pancake-host    (per-host)      │  ← top
    overlay  ├──────────────────────────────────┤
-            │  chronyd-v1  (dm-verity ext4)    │
+            │  pancake-runtime (CLI + units)   │
             ├──────────────────────────────────┤
-            │  base v1     (dm-verity ext4)    │
+            │  pancake-base    (passwd/PAM/…)  │
+            ├──────────────────────────────────┤
+            │  ~150 .deb-derived layers        │
             ╞══════════════════════════════════╡
-            │  nullfs      (immutable, empty)  │  real rootfs
+            │  nullfs   (immutable, empty)     │  real rootfs
             └──────────────────────────────────┘
 ```
 
-Each daemon ships as its own verity-signed image; `base` carries init/systemd/libs.
+Every layer is a dm-verity-signed ext4 image. Rootfs = `mount -t overlay`.
 
 ---
 
-## How we get there · boot
+## Layer roles
+
+| Layer | What's in it | Built where |
+|---|---|---|
+| **`<deb>-<ver>`** × N | one .deb's payload (no dpkg metadata, no docs) | server |
+| **`pancake-base`** | identity tables, PAM common-*, `/etc/hosts`, `/etc/profile`, … | server |
+| **`pancake-runtime`** | pancake CLI + `mount-overlay`/`pivot-root` + systemd generator | server (blob inputs) |
+| **`pancake-kernel`** + **`pancake-modules`** | bzImage + `/lib/modules/<v>/` | server (blob inputs) |
+| **`pancaked`** | the in-VM agent daemon | server (blob input) |
+| **`pancake-host`** | hostname, ssh keys, sshd_config, resolv.conf, machine-id | **client** |
+
+`pancake-host` is per-host; everything else is shared across the fleet.
+
+---
+
+## How a kit gets built
+
+```
+  recipe.toml ────────────────►  pancake bootstrap --builder=…
+                                          │
+                                          │ gRPC: BuildGeneration
+                                          ▼
+                                  pancake-build-server
+                                  (containerized, persistent
+                                   roothash-keyed cache)
+                                          │
+                                          │ gRPC: GetLayer × N
+                                          ▼
+                                  kit/repo/<roothash>/
+                                  └── manifest.toml + .sig
+```
+
+One mmdebstrap on the server; clients only download canonical layer bytes.
+
+<span class="small">Same `(suite, sorted package set)` → same roothashes across the fleet.</span>
+
+---
+
+## Boot
 
 ```
   qemu/kvm
      │
      ▼
-  kernel + embedded initramfs
-     │  mount nullfs               (immutable real rootfs)
-     │  mount tmpfs on top         (initramfs)
+  signed UKI (kernel + initramfs + cmdline + manifest.pubkey)
+     │     ← UEFI Secure Boot verifies
+     │     ← systemd-stub measures into PCR 11
      ▼
-  /init  (PID 1)
-     │  veritysetup open  base, sshd, chronyd
-     │  mount  /lowers/<pkg>  ro          (one per pkg)
-     │  mount  overlay /sysroot           (lowerdir = sshd:chronyd:base,
-     │                                     upperdir = tmpfs)
-     │  mount --move /lowers → /sysroot   (custom — not handled by switch_root)
+  /init
+     │   verify generations/<id>/manifest.toml.sig
+     │   compare manifest.counter vs TPM NV index 0x01400001
+     │   extend PCR 13 = sha256(manifest.toml)
+     │   extend PCR 14 = sha256(lowers TSV)
+     │   veritysetup open  (one per layer)
+     │   mount overlay /sysroot   (fsopen + N × fsconfig "lowerdir+")
      ▼
-  switch_root /sysroot /sbin/init        (auto-moves /proc /sys /dev /run)
-     │
-     ▼
-  systemd  →  ssh.service · chrony.service · …
+  switch_root /sysroot /sbin/init
 ```
+
+Tampering anywhere on the chain → wrong PCR → unseal/decrypt fails → won't boot.
 
 ---
 
-## Why it works now
+## Required kernel: Brauner's nullfs series (Linux 7.2)
 
-| Commit | What |
-|--------|------|
-| `576ee5dfd459` | **`fs: add immutable rootfs`** <br> <span class="small">Introduces `nullfs` — a permanently-empty `S_IMMUTABLE` single-inode filesystem. Designed to sit at the bottom of every namespace's mount tree as a placeholder.</span> |
-| `313c47f4fe4d` | **`fs: use nullfs unconditionally as the real rootfs`** <br> <span class="small">Removes the boot-time opt-in. Every namespace now actually roots at nullfs, with the user-visible rootfs (initramfs / real /) mounted on top of it.</span> |
-| `3c1b73fc6a4d` | **`fs: add init_pivot_root()`** <br> <span class="small">Kernel-internal `pivot_root(2)` helper used during early boot to set up the namespace mount tree.</span> |
-| `ccfac16e0be5` | **`move_mount: allow MOVE_MOUNT_BENEATH on the rootfs`** <br> <span class="small">Drops the "must not be a root of some namespace" rejection. Now legal because nullfs is always the real parent.</span> |
-| `c62a4766937e` | **`move_mount: transfer MNT_LOCKED`** <br> <span class="small">When BENEATH-stacking under a locked mount, hand the lock to the new mount so the old one becomes unlockable and can be detached.</span> |
+```
+576ee5dfd459  fs: add immutable rootfs
+313c47f4fe4d  fs: use nullfs unconditionally as the real rootfs
+3c1b73fc6a4d  fs: add init_pivot_root()
+ccfac16e0be5  move_mount: allow MOVE_MOUNT_BENEATH on the rootfs
+c62a4766937e  move_mount: transfer MNT_LOCKED
+```
 
-<br>
-
-<span class="small">Together: `pivot_root(2)` works on a running multi-process system; no `switch_root` workarounds.</span>
+Together: `pivot_root(2)` legal on a running multi-process system.
 
 ---
 
 ## The atomic primitive
 
 ```c
-// fs/fs_struct.c
+// fs/fs_struct.c — invoked by pivot_root(2)
 void chroot_fs_refs(const struct path *old, const struct path *new) {
     for_each_process_thread(g, p) {
         replace_path(&p->fs->root, old, new);
@@ -99,199 +139,141 @@ void chroot_fs_refs(const struct path *old, const struct path *new) {
 
 <br>
 
-Called by `pivot_root(2)` at `fs/namespace.c:4727`.
-
 **Every running task's `fs.root` is rebased atomically.**
+systemd, sshd, chrony — all running, all keep running, all see the new tree.
 
 ---
 
-## The workflow
+## Live-swap recipe
+
+1. Stage new rootfs at `/run/newroot` (overlay of new layers)
+2. rbind `/proc /sys /dev /run /tmp /lowers` (preserves systemd sockets)
+3. `mount --make-rprivate /` (pivot_root requires private propagation)
+4. `pivot_root(".", "./oldroot")`  ← the atomic moment
+5. `umount2("/oldroot", MNT_DETACH)`
+6. `mount --make-rshared /` (restore systemd's nspawn assumption)
 
 <br>
 
-1. Stage new rootfs at `/run/newroot`
-2. Rbind dynamic-state mounts
-3. Make propagation private
-4. `pivot_root(2)`
-5. Unmount old
-6. Restore shared propagation
-
-<br>
-
-<span class="small">~30 lines of shell + 5 lines of C.</span>
-
----
-
-## Step 1 · Stage new rootfs
-
-```
-                         ┌──────────────────────┐
-   /run/newroot     →    │  overlay             │
-                         │  lowerdir = NEW:base │
-                         │  upperdir = tmpfs    │
-                         └──────────────────────┘
-                              (no submounts yet)
-```
-
-```bash
-mount -t overlay overlay /run/newroot \
-    -o lowerdir=NEW_PKG:base:CHRONYD,\
-       upperdir=/run/scratch/upper,\
-       workdir=/run/scratch/work
-```
-
----
-
-## Step 2 · Rbind dynamic-state mounts
-
-```
-/run/newroot/
-├─ proc    ← rbind  /proc
-├─ sys     ← rbind  /sys
-├─ dev     ← rbind  /dev
-├─ run     ← rbind  /run         (systemd's sockets!)
-├─ tmp     ← rbind  /tmp
-└─ lowers  ← rbind  /lowers      (verity images)
-```
-
-```bash
-for d in proc sys dev run tmp lowers; do
-    mount --rbind "/$d" "/run/newroot/$d"
-    mount --make-rprivate "/run/newroot/$d"
-done
-```
-
----
-
-## Step 3 · Make propagation private
-
-```bash
-mount --make-rprivate /
-```
-
-<br>
-
-Why: `pivot_root(2)` rejects shared propagation on `old_mnt`,
-`new_mnt`'s parent, or `root_mnt`'s parent (`fs/namespace.c:4690`).
-
-systemd hardcodes `mount(NULL, "/", NULL, MS_REC|MS_SHARED, NULL)` at boot
-(`src/shared/mount-setup.c:520`, identical in latest 261-devel). No config
-knob; only the re-exec path skips it. We flip `/` private at swap time
-and restore in step 6.
-
----
-
-## Step 4 · the `pivot_root(2)` syscall
-
-```c
-#include <sys/syscall.h>          // no glibc wrapper exists —
-#include <unistd.h>                // we invoke it via syscall(2) directly
-
-chdir("/run/newroot");
-mkdir("oldroot", 0755);
-
-syscall(SYS_pivot_root, ".", "./oldroot");   // ← kernel syscall
-//   │
-//   └─→  inside the kernel:
-//        chroot_fs_refs(old_root, new_root)
-//        for_each_process_thread → rebase fs.root + fs.pwd
-```
-
-```
-   Before                          After
-   ──────                          ─────
-   /        OLD overlay            /         NEW overlay
-   /run/    ...                    /oldroot  OLD overlay (moved)
-            └─ /newroot/ NEW       /...      (everything else
-                                              already rbound)
-```
-
----
-
-## Step 5 · Drop the old root
-
-```c
-chdir("/");
-umount2("/oldroot", MNT_DETACH);
-```
-
-```
-   Before                          After
-   ──────                          ─────
-   /         NEW overlay           /         NEW overlay
-   /oldroot  OLD overlay           (gone)
-```
-
-<br>
-
-`MNT_DETACH` because daemons may still hold open fds on OLD.
-The kernel keeps OLD alive in memory until the last ref drops.
-
----
-
-## Step 6 · Restore shared propagation
-
-```bash
-mount --make-rshared /
-```
-
-<br>
-
-Lennart, `docs/CONTAINER_INTERFACE.md` (commit `32f4e30b`):
-
-> *"The mount hierarchy of the container should be mounted MS_SHARED
-> before invoking systemd as PID 1. **Things will break at various places**
-> if this is not done."*
-
-Symmetric with Step 3. Restores nspawn / sandboxing / propagation behavior.
+~30 lines of shell + 5 lines of C. No daemon cooperation needed.
 
 ---
 
 ## Live demo · sshd v1 → v2
 
 ```
-[in-vm] BEFORE
-  banner: pancake sshd v1
-  PID 1 mountinfo: lowerdir=/lowers/sshd:...
+[in-vm]  pancake list
+  → openssh-server-9.6p1-3ubuntu13.16
 
-[in-vm] pivot_root(".", "./oldroot")
-[in-vm] umount2("/oldroot", MNT_DETACH)
+[in-vm]  pancake install ./openssh-server-9.6p1-3ubuntu13.20.deb
+[in-vm]  pancake swap                  ← pivot_root(2)
 
-[in-vm] AFTER
-  banner: pancake sshd v2
-  PID 1 mountinfo: lowerdir=/run/lowers/sshd-v2:...
-  ssh / chrony: active
+[in-vm]  pancake list
+  → openssh-server-9.6p1-3ubuntu13.20
 
-# fresh ssh from outside:
-$ cat /etc/issue.net    →  pancake sshd v2
-$ chronyc tracking      →  syncing
+# from another shell:
+$ ssh root@vm                          ← still works, same connection
 ```
+
+systemd, chrony, ssh.socket — all kept their PIDs. No reboot.
+
+---
+
+## Trust chain
+
+```
+  build server      ┌───────────────────────────────────────┐
+  ──────────────    │  signs manifest.toml with kit's key   │
+                    └───────────────────┬───────────────────┘
+                                        │
+  initramfs/init    ┌───────────────────▼───────────────────┐
+  ──────────────    │  verifies sig with baked-in pubkey    │
+                    │  TPM NV counter ≥ manifest.counter ?  │
+                    │  extend PCR 13 + PCR 14               │
+                    └───────────────────┬───────────────────┘
+                                        │
+  pancaked          ┌───────────────────▼───────────────────┐
+  ──────────────    │  bearer token unsealed (PCR 7+11)     │
+                    │  per-boot AK + EK provisioned         │
+                    │  Attest RPC ready                     │
+                    └───────────────────────────────────────┘
+```
+
+---
+
+## Remote attestation
+
+```
+   verifier                                   pancaked (in VM)
+   ────────                                   ────────────────
+   Attest(nonce) ──────────────────────────►
+                                              tpm2_quote → quote, sig
+                                              read /sys/.../bios_measurements
+                       ◄────── quote, sig, AK pub, EK pub, AK name,
+                                PCRs, event log, pcrs.bin
+
+   tpm2_makecredential
+        ─e ek.pub  ─n ak.name  ─s SECRET ─o blob
+   ActivateCredential(blob) ─────────────►
+                                              tpm2_activatecredential
+                                              ─C ek.ctx  ─c ak.ctx  ─i blob
+                       ◄────── secret′
+   SECRET == secret′  ⇒  AK is in the same TPM as enrolled EK
+```
+
+---
+
+## Five checks per attest
+
+```
+[attest] OK    EK pubkey matches enrolled
+[attest] OK    credential activation (AK is in same TPM as enrolled EK)
+[attest] OK    quote signature valid (AK signed nonce + PCRs)
+[attest] OK    PCR 13 = extend(sha256(manifest.toml))
+[attest] OK    PCR 14 = extend(sha256(lowers))
+[attest] INFO  PCR 11 firmware-event-log replay (12 firmware entries):
+  [34] PCR11 sha256=0da293e3… event=".linux"
+  [35] PCR11 sha256=04b7730f… event=".linux"
+  [36] PCR11 sha256=3fb9e4e3… event=".osrel"
+  [37..] event=".cmdline" .initrd .uname
+[attest] OVERALL PASS
+```
+
+Tamper the kit → PCR 13/14 mismatch. Swap the kernel → PCR 11 chain breaks.
+
+---
+
+## Demo: `demo/demo.sh`
+
+```bash
+demo/demo.sh --bzimage=~/linux/arch/x86/boot/bzImage \
+             --auth-key=~/.ssh/id_ed25519.pub
+```
+
+Does, end-to-end:
+
+1. Build pancake binaries
+2. Build + start `pancake-build-server` container (cache volume)
+3. Bootstrap a signed UEFI kit via the build server
+4. Boot under OVMF + swtpm
+5. `pancake enroll` inside VM → seal token + export EK
+6. `pancake attest` from host → all 5 checks PASS
+
+~3 minutes cold; <30 s on cache hit.
 
 ---
 
 ## Containers on the same host
 
-Container processes have their **own** `fs.root` (set by their runtime's own
-`pivot_root`). `chroot_fs_refs` only matches tasks whose root is the host's
-old root → **container processes are untouched**.
-
-But mount propagation severs:
-
-```
-   host /              shared peer group P
-   container /         slave of P  →  receives host events
-
-   make-rprivate /     →  P destroyed; container becomes orphaned slave
-   pivot_root          →  host rootfs swapped (container ns unaffected)
-   make-rshared /      →  host joins NEW peer group P'
-                          container is NOT in P'
-```
+`chroot_fs_refs` only matches tasks whose root is the *host's* old root.
+Container processes have their own `fs.root` (set by the runtime's own
+`pivot_root`) — **untouched** by a host swap.
 
 | Setup | Impact |
 |---|---|
-| Docker / Podman (private by default) | None |
-| `systemd-nspawn --bind=…` | Bind mounts work; future host events stop reaching container |
-| Containers using rbound `/lowers`, `/run`, `/dev` | Still work (same superblock) |
+| Docker / Podman (private propagation by default) | None |
+| `systemd-nspawn --bind=…` | Bind mounts intact; future host events stop reaching |
+| Containers with rbound `/lowers`, `/run`, `/dev` | Still work (same superblock) |
 
 ---
 
@@ -299,11 +281,11 @@ But mount propagation severs:
 
 # Wrap-up
 
-Verity-imaged rootfs · live atomic swap · no reboot · no systemd cooperation.
+Verity-imaged rootfs · live atomic swap · remote attestation
 
 <br>
 
-Code & slides: **[github.com/sinkap/fs-pancake](https://github.com/sinkap/fs-pancake)**
+[github.com/sinkap/pancake](https://github.com/sinkap/pancake) · `demo/demo.sh`
 
 <br>
 
@@ -311,4 +293,4 @@ Code & slides: **[github.com/sinkap/fs-pancake](https://github.com/sinkap/fs-pan
 
 <br>
 
-KP Singh · [github.com/sinkap](https://github.com/sinkap)
+KP Singh

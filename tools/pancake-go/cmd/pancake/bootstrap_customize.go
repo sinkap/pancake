@@ -1,13 +1,18 @@
 // customize.go: post-mmdebstrap surgery on the sandbox.
 //
 // Two responsibilities:
-//   - customizeSandbox: machine identity (hostname, ssh keys + authorized_keys,
-//     sshd_config, debug.service, networkd config). All baked in BEFORE
-//     per-package snapshot so the changes land in whichever layer owns each
-//     path (or the orphan pancake-state image).
+//   - customizeSandbox: shared (non-per-host) surgery — sshd_config,
+//     networkd config, debug.service, resolv.conf. Identical on every
+//     machine so it lives in the per-package / pancake-state layers,
+//     which makes those layers' roothashes share-able across the fleet.
 //   - bakePancakeRuntime: drop the Go pancake CLI + the C helpers
 //     (mount-overlay, pivot-root) + the systemd remount-rw unit so the
 //     booted VM can actually run `pancake install` / `pancake swap`.
+//
+// Per-host content (hostname, ssh host keys, authorized_keys) lives in
+// its own pancake-host layer — see packPancakeHostLayer in bootstrap.go
+// and isPerHostPath for the path filter that keeps it out of every
+// other layer.
 package main
 
 import (
@@ -15,8 +20,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/runner"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/sign"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
 )
 
 // signPubkeyFromCert is a tiny indirection so the bake step can call into
@@ -26,91 +31,7 @@ func signPubkeyFromCert(certPath, outPath string) error {
 }
 
 func customizeSandbox(sandbox string, a bootstrapArgs) error {
-	fmt.Fprintln(os.Stderr, "\n[bootstrap] customizing sandbox")
-
-	// /etc/hostname (owned by base-files; goes into base-files' layer).
-	fmt.Fprintf(os.Stderr, "  hostname → %s\n", a.Hostname)
-	if err := writeFileSudo(filepath.Join(sandbox, "etc/hostname"),
-		a.Hostname+"\n", 0o644); err != nil {
-		return err
-	}
-
-	// SSH host keys.
-	sshDir := filepath.Join(sandbox, "etc/ssh")
-	if err := runner.Run(runner.Cmd{
-		Argv: []string{"mkdir", "-p", sshDir}, Sudo: true,
-	}); err != nil {
-		return err
-	}
-	if a.SSHHostKeysDir != "" {
-		fmt.Fprintf(os.Stderr, "  ssh host keys ← %s\n", a.SSHHostKeysDir)
-		if err := runner.Run(runner.Cmd{
-			Argv: []string{"sh", "-c",
-				fmt.Sprintf("cp -a %s/ssh_host_* %s/",
-					a.SSHHostKeysDir, sshDir)},
-			Sudo: true,
-		}); err != nil {
-			return err
-		}
-	} else {
-		fmt.Fprintf(os.Stderr, "  generating fresh ssh host keys in %s\n", sshDir)
-		for _, kt := range []string{"rsa", "ecdsa", "ed25519"} {
-			kf := filepath.Join(sshDir, "ssh_host_"+kt+"_key")
-			if err := runner.Run(runner.Cmd{
-				Argv: []string{"sh", "-c",
-					fmt.Sprintf("rm -f %s %s.pub && ssh-keygen -q -N '' -t %s -f %s",
-						kf, kf, kt, kf)},
-				Sudo: true,
-			}); err != nil {
-				return err
-			}
-		}
-	}
-	if err := runner.Run(runner.Cmd{
-		Argv: []string{"sh", "-c",
-			fmt.Sprintf("chmod 600 %s/ssh_host_*_key && chmod 644 %s/ssh_host_*_key.pub",
-				sshDir, sshDir)},
-		Sudo: true,
-	}); err != nil {
-		return err
-	}
-
-	// /root/.ssh/authorized_keys (only login path: passwords are awkward
-	// against an RO rootfs).
-	if a.SSHAuthKeysFile != "" {
-		if fi, err := os.Stat(a.SSHAuthKeysFile); err != nil || fi.IsDir() {
-			return fmt.Errorf("--ssh-authorized-keys: not a file: %s",
-				a.SSHAuthKeysFile)
-		}
-		fmt.Fprintf(os.Stderr, "  /root/.ssh/authorized_keys ← %s\n",
-			a.SSHAuthKeysFile)
-		if err := runner.Run(runner.Cmd{
-			Argv: []string{"mkdir", "-p", filepath.Join(sandbox, "root/.ssh")},
-			Sudo: true,
-		}); err != nil {
-			return err
-		}
-		if err := runner.Run(runner.Cmd{
-			Argv: []string{"chmod", "700", filepath.Join(sandbox, "root/.ssh")},
-			Sudo: true,
-		}); err != nil {
-			return err
-		}
-		if err := runner.Run(runner.Cmd{
-			Argv: []string{"cp", a.SSHAuthKeysFile,
-				filepath.Join(sandbox, "root/.ssh/authorized_keys")},
-			Sudo: true,
-		}); err != nil {
-			return err
-		}
-		if err := runner.Run(runner.Cmd{
-			Argv: []string{"chmod", "600",
-				filepath.Join(sandbox, "root/.ssh/authorized_keys")},
-			Sudo: true,
-		}); err != nil {
-			return err
-		}
-	}
+	fmt.Fprintln(os.Stderr, "\n[bootstrap] customizing sandbox (shared)")
 
 	// pancake-debug.service: end-of-boot diagnostic dump → console.
 	debugUnit := `[Unit]

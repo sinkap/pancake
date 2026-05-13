@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
 )
 
 // SlugifyVersion reduces a Debian version to chars safe for dm-mapper device

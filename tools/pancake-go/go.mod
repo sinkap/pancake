@@ -1,4 +1,4 @@
-module github.com/sinkap/fs-pancake/tools/pancake-go
+module github.com/sinkap/pancake/tools/pancake-go
 
 go 1.25.0
 

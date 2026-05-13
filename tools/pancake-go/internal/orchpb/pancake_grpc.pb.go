@@ -36,6 +36,8 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	Pancake_GetCurrentManifest_FullMethodName = "/pancake.v1.Pancake/GetCurrentManifest"
 	Pancake_Update_FullMethodName             = "/pancake.v1.Pancake/Update"
+	Pancake_Attest_FullMethodName             = "/pancake.v1.Pancake/Attest"
+	Pancake_ActivateCredential_FullMethodName = "/pancake.v1.Pancake/ActivateCredential"
 )
 
 // PancakeClient is the client API for Pancake service.
@@ -54,6 +56,28 @@ type PancakeClient interface {
 	// failed apply leaves no observable change, and a successful apply
 	// costs nothing until explicitly activated.
 	Update(ctx context.Context, in *Manifest, opts ...grpc.CallOption) (*UpdateResponse, error)
+	// Attest produces a TPM2 quote over the requested PCRs, signed by
+	// the per-boot AK that pancaked provisioned at startup. Verifier:
+	//   - validates quote signature against AttestResponse.ak_pub
+	//   - confirms AK ownership against EK (compare ek_pub to the
+	//     value enrolled at `pancake enroll` time; optionally run
+	//     credential activation for cryptographic binding)
+	//   - compares PCR digests against expected (computed from the
+	//     generation manifest the verifier knows it pushed)
+	//
+	// Returns Unavailable if the host has no TPM (then attestation is
+	// off and the orchestrator falls back to other trust signals).
+	Attest(ctx context.Context, in *AttestRequest, opts ...grpc.CallOption) (*AttestResponse, error)
+	// ActivateCredential cryptographically proves the AK lives in the
+	// same TPM as the enrolled EK. Verifier flow:
+	//  1. Get AK pub + EK pub + AK name from a prior Attest()
+	//  2. Generate a random secret S
+	//  3. tpm2_makecredential -e ek.pub -n ak.name -s S -o blob
+	//  4. ActivateCredential(blob) → S' from the VM's TPM
+	//  5. If S == S' the AK is bound to that EK (the encryption is
+	//     keyed to AK.name, only an activation by a TPM holding both
+	//     EK and AK can produce the original secret).
+	ActivateCredential(ctx context.Context, in *ActivateCredentialRequest, opts ...grpc.CallOption) (*ActivateCredentialResponse, error)
 }
 
 type pancakeClient struct {
@@ -84,6 +108,26 @@ func (c *pancakeClient) Update(ctx context.Context, in *Manifest, opts ...grpc.C
 	return out, nil
 }
 
+func (c *pancakeClient) Attest(ctx context.Context, in *AttestRequest, opts ...grpc.CallOption) (*AttestResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AttestResponse)
+	err := c.cc.Invoke(ctx, Pancake_Attest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pancakeClient) ActivateCredential(ctx context.Context, in *ActivateCredentialRequest, opts ...grpc.CallOption) (*ActivateCredentialResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActivateCredentialResponse)
+	err := c.cc.Invoke(ctx, Pancake_ActivateCredential_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PancakeServer is the server API for Pancake service.
 // All implementations must embed UnimplementedPancakeServer
 // for forward compatibility.
@@ -100,6 +144,28 @@ type PancakeServer interface {
 	// failed apply leaves no observable change, and a successful apply
 	// costs nothing until explicitly activated.
 	Update(context.Context, *Manifest) (*UpdateResponse, error)
+	// Attest produces a TPM2 quote over the requested PCRs, signed by
+	// the per-boot AK that pancaked provisioned at startup. Verifier:
+	//   - validates quote signature against AttestResponse.ak_pub
+	//   - confirms AK ownership against EK (compare ek_pub to the
+	//     value enrolled at `pancake enroll` time; optionally run
+	//     credential activation for cryptographic binding)
+	//   - compares PCR digests against expected (computed from the
+	//     generation manifest the verifier knows it pushed)
+	//
+	// Returns Unavailable if the host has no TPM (then attestation is
+	// off and the orchestrator falls back to other trust signals).
+	Attest(context.Context, *AttestRequest) (*AttestResponse, error)
+	// ActivateCredential cryptographically proves the AK lives in the
+	// same TPM as the enrolled EK. Verifier flow:
+	//  1. Get AK pub + EK pub + AK name from a prior Attest()
+	//  2. Generate a random secret S
+	//  3. tpm2_makecredential -e ek.pub -n ak.name -s S -o blob
+	//  4. ActivateCredential(blob) → S' from the VM's TPM
+	//  5. If S == S' the AK is bound to that EK (the encryption is
+	//     keyed to AK.name, only an activation by a TPM holding both
+	//     EK and AK can produce the original secret).
+	ActivateCredential(context.Context, *ActivateCredentialRequest) (*ActivateCredentialResponse, error)
 	mustEmbedUnimplementedPancakeServer()
 }
 
@@ -115,6 +181,12 @@ func (UnimplementedPancakeServer) GetCurrentManifest(context.Context, *GetCurren
 }
 func (UnimplementedPancakeServer) Update(context.Context, *Manifest) (*UpdateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Update not implemented")
+}
+func (UnimplementedPancakeServer) Attest(context.Context, *AttestRequest) (*AttestResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Attest not implemented")
+}
+func (UnimplementedPancakeServer) ActivateCredential(context.Context, *ActivateCredentialRequest) (*ActivateCredentialResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ActivateCredential not implemented")
 }
 func (UnimplementedPancakeServer) mustEmbedUnimplementedPancakeServer() {}
 func (UnimplementedPancakeServer) testEmbeddedByValue()                 {}
@@ -173,6 +245,42 @@ func _Pancake_Update_Handler(srv interface{}, ctx context.Context, dec func(inte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Pancake_Attest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AttestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PancakeServer).Attest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Pancake_Attest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PancakeServer).Attest(ctx, req.(*AttestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Pancake_ActivateCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ActivateCredentialRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PancakeServer).ActivateCredential(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Pancake_ActivateCredential_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PancakeServer).ActivateCredential(ctx, req.(*ActivateCredentialRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Pancake_ServiceDesc is the grpc.ServiceDesc for Pancake service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -187,6 +295,14 @@ var Pancake_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Update",
 			Handler:    _Pancake_Update_Handler,
+		},
+		{
+			MethodName: "Attest",
+			Handler:    _Pancake_Attest_Handler,
+		},
+		{
+			MethodName: "ActivateCredential",
+			Handler:    _Pancake_ActivateCredential_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

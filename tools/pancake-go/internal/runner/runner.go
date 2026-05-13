@@ -21,9 +21,10 @@ import (
 
 // Cmd describes one invocation. Sudo=true means "use sudo if euid != 0".
 type Cmd struct {
-	Argv []string
-	Env  []string // appended to os.Environ(); KEY=VAL form
-	Sudo bool
+	Argv  []string
+	Env   []string // appended to os.Environ(); KEY=VAL form
+	Sudo  bool
+	Stdin []byte // optional; written to the process's stdin
 }
 
 // log prints the trace line in the same shape as pancake_lib.run().
@@ -49,6 +50,9 @@ func Run(c Cmd) error {
 	cmd.Stdout = os.Stderr // pancake mirrors python: traces + tool output go to stderr
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), c.Env...)
+	if c.Stdin != nil {
+		cmd.Stdin = bytes.NewReader(c.Stdin)
+	}
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
 	}

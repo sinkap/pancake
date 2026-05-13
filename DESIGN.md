@@ -246,6 +246,62 @@ is also written by systemd-stub.
       permitted` → daemon refuses to start. Effectively quarantines a
       tampered fleet member from accepting pushes. Re-enrollment is
       required after any boot-chain change.
+- [x] Per-host identity layer (`pancake-host`) — `/etc/hostname`,
+      `/etc/ssh/ssh_host_*_key{,.pub}`, `/root/.ssh/authorized_keys`,
+      `/etc/ssh/sshd_config`, `/etc/resolv.conf`,
+      `/etc/systemd/network/10-wired.network`, `/etc/machine-id` (placeholder)
+      live in their own verity layer, carved out of base-files /
+      openssh-server / pancake-state by an `isPerHostPath` filter in
+      bootstrap. Pinned at the TOP of the overlay stack so its files
+      win. Effect: every other layer's roothash is a function of the
+      .deb set + recipe, not the host. Precondition for the orchestrator
+      shipping one fleetwide manifest while each node keeps its own
+      pancake-host pinned.
+- [x] Build server (`pancake-build-server`) — gRPC service that
+      runs mmdebstrap + per-package layer construction once, caches
+      every layer keyed by its dm-verity roothash, and serves canonical
+      bytes via `GetLayer` to clients. Recipe-driven `pancake bootstrap
+      --builder=…` clients send a `BuildGeneration(packages, base
+      recipe)` request; server returns N `LayerHandle`s plus a signed
+      generation manifest. Internal-layer recipes (`base`, `runtime`,
+      `kernel`, `modules`, `pancaked`) are data-driven via a text-proto
+      catalog (`internal/buildpb/internal_layers.textproto`) — adding
+      a new internal layer kind is a data change + Go handler, no
+      `.proto` edit. Container image at `tools/pancake-go/server/Dockerfile`
+      ships with a `VOLUME /var/lib/pancake-build-server` so layer
+      cache persists across container restarts.
+- [x] PCR 14 = sha256(lowers TSV) — initramfs/init extends PCR 14
+      with the hash of the lowers file before opening any verity device.
+      Binds every layer's roothash into one quotable PCR; one value
+      covers the entire layer set for attestation. Hard-fail discipline
+      (matching PCR 13) when TPM is present.
+- [x] Remote attestation (`pancake attest`, Step 5) — pancaked
+      provisions a per-boot AK + EK at startup (`tpm2_createek` +
+      `tpm2_createak`). New `Attest(nonce, pcrs[])` RPC returns:
+      tpm2_quote bytes + ECDSA signature, AK + EK pubkeys, AK name,
+      per-PCR digests, raw `pcrs.bin`, and the firmware event log.
+      `pancake enroll` now also exports `/etc/pancake/ek.pub` (EK
+      extraction is decoupled from systemd-creds — works on direct
+      `-kernel` boots too, with a warning that token sealing is
+      skipped). Verifier (`pancake attest --target=… --ek-pub=… --kit=…`)
+      runs five checks:
+        1. EK pubkey byte-match vs the file shipped at enroll time.
+        2. **Credential activation**: verifier generates random secret,
+           `tpm2_makecredential -T none` encrypts it to AK-name under
+           EK; `ActivateCredential` RPC asks the VM's TPM to decrypt;
+           verifier compares secrets. Cryptographic proof AK is in the
+           same TPM as the enrolled EK.
+        3. Quote signature: `tpm2_checkquote` against AK pubkey + nonce.
+        4. PCR 13 = `extend(0×32, sha256(generation manifest.toml))`.
+        5. PCR 14 = `extend(0×32, sha256(lowers TSV))`.
+      Plus an INFO-level PCR 11 firmware-event-log replay: parse
+      `/sys/kernel/security/tpm0/binary_bios_measurements` (TCG_PCR_EVENT
+      + TCG_PCR_EVENT2 records), replay sha256 extends, print the
+      UKI section measurements (`.linux .osrel .cmdline .initrd .uname`)
+      so operators can confirm the loaded UKI. Live PCR 11 typically
+      diverges from firmware-replay because systemd-pcrextend appends
+      `sysinit`/`ready`/etc. from userspace — flagged INFO with both
+      values, not FAIL.
 - [ ] LUKS2 encryption of the state partition with TPM-sealed key
       (Step 5, deferred — kit is mostly public-FOSS so confidentiality
       isn't the most valuable next thing; integrity gates are already

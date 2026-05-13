@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/deb"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/deb"
 )
 
 // topologicalOrder returns package names in DEPENDENCY-FIRST order

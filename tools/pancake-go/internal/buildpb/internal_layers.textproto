@@ -1,0 +1,55 @@
+# Catalog of pancake's own ("internal") layer recipes — loaded by
+# pancake-build-server at startup. Adding a new internal layer kind:
+#
+#   1. Add a `recipe` block here describing inputs.
+#   2. Add a Go builder handler keyed by `name` in
+#      server/recipes/.
+#
+# No .proto edit needed; PancakeInternal carries arbitrary inputs
+# and the server validates against this catalog.
+#
+# ----------------------------------------------------------------
+# This file is parsed as `Catalog` (see Catalog message in
+# build.proto). Format is standard protobuf text format.
+# ----------------------------------------------------------------
+
+recipe {
+  name: "base"
+  description: "Cross-cutting baseline files for a package set "
+               "(passwd/shadow/group, PAM common-*, /etc/hosts, "
+               "/etc/profile, /etc/fstab, ...). ~36 files; "
+               "deterministic from the sorted package list."
+  requires_packages: true
+}
+
+recipe {
+  name: "runtime"
+  description: "The pancake layer — pancake CLI + C helpers + "
+               "systemd units (pancake-debug, pancake-state-rw, "
+               "pancake-ldconfig, pancake-hwdb)."
+  required_blobs: "pancake-binary"
+  required_blobs: "mount-overlay-binary"
+  required_blobs: "pivot-root-binary"
+  optional_blobs: "manifest-pubkey"
+}
+
+recipe {
+  name: "kernel"
+  description: "/boot/vmlinuz from an uploaded bzImage."
+  requires_version: true
+  required_blobs: "bzimage"
+}
+
+recipe {
+  name: "modules"
+  description: "/lib/modules/<version> from an uploaded tarball."
+  requires_version: true
+  required_blobs: "tarball"
+}
+
+recipe {
+  name: "pancaked"
+  description: "/usr/sbin/pancaked + systemd unit."
+  requires_version: true
+  required_blobs: "binary"
+}

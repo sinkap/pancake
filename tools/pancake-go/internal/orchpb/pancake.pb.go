@@ -204,6 +204,333 @@ func (x *UpdateResponse) GetError() string {
 	return ""
 }
 
+type AttestRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Caller-supplied freshness nonce. The TPM signs (PCRs || nonce)
+	// so a verifier can confirm the quote was generated for THIS
+	// request, not replayed. Must be >= 8 bytes; 32 bytes recommended.
+	Nonce []byte `protobuf:"bytes,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	// PCR indices to quote. Empty = the pancake-os defaults
+	// {7, 11, 12, 13, 14}. Algorithm is sha256 (the only bank
+	// pancake-os relies on today).
+	Pcrs          []int32 `protobuf:"varint,2,rep,packed,name=pcrs,proto3" json:"pcrs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttestRequest) Reset() {
+	*x = AttestRequest{}
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttestRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttestRequest) ProtoMessage() {}
+
+func (x *AttestRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttestRequest.ProtoReflect.Descriptor instead.
+func (*AttestRequest) Descriptor() ([]byte, []int) {
+	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *AttestRequest) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+func (x *AttestRequest) GetPcrs() []int32 {
+	if x != nil {
+		return x.Pcrs
+	}
+	return nil
+}
+
+type AttestResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Raw TPM2_Quote output: an attestation structure (TPMS_ATTEST)
+	// covering nonce + PCR composite + clock + firmware version.
+	Quote []byte `protobuf:"bytes,1,opt,name=quote,proto3" json:"quote,omitempty"`
+	// ECDSA signature over `quote`, made with AK.
+	Signature []byte `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
+	// AK public area (TPM2B_PUBLIC marshalled). Verifier uses this
+	// to check `signature`.
+	AkPub []byte `protobuf:"bytes,3,opt,name=ak_pub,json=akPub,proto3" json:"ak_pub,omitempty"`
+	// EK public area (TPM2B_PUBLIC). Verifier compares against the
+	// value enrolled at `pancake enroll` time. For full binding, the
+	// verifier can run a credential-activation roundtrip with this EK
+	// and confirm the AK is in the same TPM (skipped in v1 — caller
+	// chooses the trust depth).
+	EkPub []byte                      `protobuf:"bytes,4,opt,name=ek_pub,json=ekPub,proto3" json:"ek_pub,omitempty"`
+	Pcr   []*AttestResponse_PcrDigest `protobuf:"bytes,5,rep,name=pcr,proto3" json:"pcr,omitempty"`
+	// Raw TPM2 event log from /sys/kernel/security/tpm0/binary_bios_measurements,
+	// for interpreting PCR 11 (UKI sections measured by systemd-stub)
+	// and our own PCR 13/14 extends. Optional — empty if the kernel
+	// doesn't expose securityfs.
+	EventLog []byte `protobuf:"bytes,6,opt,name=event_log,json=eventLog,proto3" json:"event_log,omitempty"`
+	// The exact pcrs.bin file tpm2_quote -o produced server-side: a
+	// tpm2-tools-format blob (count of selections + selection bitmaps +
+	// digests). We ship it verbatim so verifiers can pass it straight
+	// to `tpm2_checkquote -f` without reconstructing the format.
+	PcrsBin []byte `protobuf:"bytes,7,opt,name=pcrs_bin,json=pcrsBin,proto3" json:"pcrs_bin,omitempty"`
+	// AK name (TPM2B_NAME — alg + digest of AK pub area). Verifiers
+	// bind credential-activation challenges to this name with
+	// tpm2_makecredential -n.
+	AkName        []byte `protobuf:"bytes,8,opt,name=ak_name,json=akName,proto3" json:"ak_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttestResponse) Reset() {
+	*x = AttestResponse{}
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttestResponse) ProtoMessage() {}
+
+func (x *AttestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttestResponse.ProtoReflect.Descriptor instead.
+func (*AttestResponse) Descriptor() ([]byte, []int) {
+	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *AttestResponse) GetQuote() []byte {
+	if x != nil {
+		return x.Quote
+	}
+	return nil
+}
+
+func (x *AttestResponse) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+func (x *AttestResponse) GetAkPub() []byte {
+	if x != nil {
+		return x.AkPub
+	}
+	return nil
+}
+
+func (x *AttestResponse) GetEkPub() []byte {
+	if x != nil {
+		return x.EkPub
+	}
+	return nil
+}
+
+func (x *AttestResponse) GetPcr() []*AttestResponse_PcrDigest {
+	if x != nil {
+		return x.Pcr
+	}
+	return nil
+}
+
+func (x *AttestResponse) GetEventLog() []byte {
+	if x != nil {
+		return x.EventLog
+	}
+	return nil
+}
+
+func (x *AttestResponse) GetPcrsBin() []byte {
+	if x != nil {
+		return x.PcrsBin
+	}
+	return nil
+}
+
+func (x *AttestResponse) GetAkName() []byte {
+	if x != nil {
+		return x.AkName
+	}
+	return nil
+}
+
+type ActivateCredentialRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// tpm2_makecredential output: an encrypted blob bound to the AK
+	// name + EK. Only a TPM holding both can decrypt.
+	Blob          []byte `protobuf:"bytes,1,opt,name=blob,proto3" json:"blob,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActivateCredentialRequest) Reset() {
+	*x = ActivateCredentialRequest{}
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActivateCredentialRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActivateCredentialRequest) ProtoMessage() {}
+
+func (x *ActivateCredentialRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActivateCredentialRequest.ProtoReflect.Descriptor instead.
+func (*ActivateCredentialRequest) Descriptor() ([]byte, []int) {
+	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ActivateCredentialRequest) GetBlob() []byte {
+	if x != nil {
+		return x.Blob
+	}
+	return nil
+}
+
+type ActivateCredentialResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The decrypted secret. Compare to the original on the verifier
+	// side — match proves AK ↔ EK binding.
+	Secret        []byte `protobuf:"bytes,1,opt,name=secret,proto3" json:"secret,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActivateCredentialResponse) Reset() {
+	*x = ActivateCredentialResponse{}
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActivateCredentialResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActivateCredentialResponse) ProtoMessage() {}
+
+func (x *ActivateCredentialResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActivateCredentialResponse.ProtoReflect.Descriptor instead.
+func (*ActivateCredentialResponse) Descriptor() ([]byte, []int) {
+	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ActivateCredentialResponse) GetSecret() []byte {
+	if x != nil {
+		return x.Secret
+	}
+	return nil
+}
+
+// PCR digests, in the same order as request.pcrs (or the default
+// set if request.pcrs was empty). For sha256 these are 32 bytes
+// each. Carried in addition to the quote so verifiers can
+// diff against expected without parsing the quote.
+type AttestResponse_PcrDigest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Index         int32                  `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`
+	Sha256        []byte                 `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttestResponse_PcrDigest) Reset() {
+	*x = AttestResponse_PcrDigest{}
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttestResponse_PcrDigest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttestResponse_PcrDigest) ProtoMessage() {}
+
+func (x *AttestResponse_PcrDigest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_orchpb_pancake_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttestResponse_PcrDigest.ProtoReflect.Descriptor instead.
+func (*AttestResponse_PcrDigest) Descriptor() ([]byte, []int) {
+	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{4, 0}
+}
+
+func (x *AttestResponse_PcrDigest) GetIndex() int32 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *AttestResponse_PcrDigest) GetSha256() []byte {
+	if x != nil {
+		return x.Sha256
+	}
+	return nil
+}
+
 var File_internal_orchpb_pancake_proto protoreflect.FileDescriptor
 
 const file_internal_orchpb_pancake_proto_rawDesc = "" +
@@ -218,10 +545,31 @@ const file_internal_orchpb_pancake_proto_rawDesc = "" +
 	"\x0eUpdateResponse\x121\n" +
 	"\x14installed_generation\x18\x01 \x01(\x05R\x13installedGeneration\x12.\n" +
 	"\x13missing_layer_slugs\x18\x02 \x03(\tR\x11missingLayerSlugs\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error2\x98\x01\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"9\n" +
+	"\rAttestRequest\x12\x14\n" +
+	"\x05nonce\x18\x01 \x01(\fR\x05nonce\x12\x12\n" +
+	"\x04pcrs\x18\x02 \x03(\x05R\x04pcrs\"\xb6\x02\n" +
+	"\x0eAttestResponse\x12\x14\n" +
+	"\x05quote\x18\x01 \x01(\fR\x05quote\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\x12\x15\n" +
+	"\x06ak_pub\x18\x03 \x01(\fR\x05akPub\x12\x15\n" +
+	"\x06ek_pub\x18\x04 \x01(\fR\x05ekPub\x126\n" +
+	"\x03pcr\x18\x05 \x03(\v2$.pancake.v1.AttestResponse.PcrDigestR\x03pcr\x12\x1b\n" +
+	"\tevent_log\x18\x06 \x01(\fR\beventLog\x12\x19\n" +
+	"\bpcrs_bin\x18\a \x01(\fR\apcrsBin\x12\x17\n" +
+	"\aak_name\x18\b \x01(\fR\x06akName\x1a9\n" +
+	"\tPcrDigest\x12\x14\n" +
+	"\x05index\x18\x01 \x01(\x05R\x05index\x12\x16\n" +
+	"\x06sha256\x18\x02 \x01(\fR\x06sha256\"/\n" +
+	"\x19ActivateCredentialRequest\x12\x12\n" +
+	"\x04blob\x18\x01 \x01(\fR\x04blob\"4\n" +
+	"\x1aActivateCredentialResponse\x12\x16\n" +
+	"\x06secret\x18\x01 \x01(\fR\x06secret2\xbe\x02\n" +
 	"\aPancake\x12Q\n" +
 	"\x12GetCurrentManifest\x12%.pancake.v1.GetCurrentManifestRequest\x1a\x14.pancake.v1.Manifest\x12:\n" +
-	"\x06Update\x12\x14.pancake.v1.Manifest\x1a\x1a.pancake.v1.UpdateResponseB?Z=github.com/sinkap/fs-pancake/tools/pancake-go/internal/orchpbb\x06proto3"
+	"\x06Update\x12\x14.pancake.v1.Manifest\x1a\x1a.pancake.v1.UpdateResponse\x12?\n" +
+	"\x06Attest\x12\x19.pancake.v1.AttestRequest\x1a\x1a.pancake.v1.AttestResponse\x12c\n" +
+	"\x12ActivateCredential\x12%.pancake.v1.ActivateCredentialRequest\x1a&.pancake.v1.ActivateCredentialResponseB<Z:github.com/sinkap/pancake/tools/pancake-go/internal/orchpbb\x06proto3"
 
 var (
 	file_internal_orchpb_pancake_proto_rawDescOnce sync.Once
@@ -235,22 +583,32 @@ func file_internal_orchpb_pancake_proto_rawDescGZIP() []byte {
 	return file_internal_orchpb_pancake_proto_rawDescData
 }
 
-var file_internal_orchpb_pancake_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_internal_orchpb_pancake_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_internal_orchpb_pancake_proto_goTypes = []any{
-	(*GetCurrentManifestRequest)(nil), // 0: pancake.v1.GetCurrentManifestRequest
-	(*Manifest)(nil),                  // 1: pancake.v1.Manifest
-	(*UpdateResponse)(nil),            // 2: pancake.v1.UpdateResponse
+	(*GetCurrentManifestRequest)(nil),  // 0: pancake.v1.GetCurrentManifestRequest
+	(*Manifest)(nil),                   // 1: pancake.v1.Manifest
+	(*UpdateResponse)(nil),             // 2: pancake.v1.UpdateResponse
+	(*AttestRequest)(nil),              // 3: pancake.v1.AttestRequest
+	(*AttestResponse)(nil),             // 4: pancake.v1.AttestResponse
+	(*ActivateCredentialRequest)(nil),  // 5: pancake.v1.ActivateCredentialRequest
+	(*ActivateCredentialResponse)(nil), // 6: pancake.v1.ActivateCredentialResponse
+	(*AttestResponse_PcrDigest)(nil),   // 7: pancake.v1.AttestResponse.PcrDigest
 }
 var file_internal_orchpb_pancake_proto_depIdxs = []int32{
-	0, // 0: pancake.v1.Pancake.GetCurrentManifest:input_type -> pancake.v1.GetCurrentManifestRequest
-	1, // 1: pancake.v1.Pancake.Update:input_type -> pancake.v1.Manifest
-	1, // 2: pancake.v1.Pancake.GetCurrentManifest:output_type -> pancake.v1.Manifest
-	2, // 3: pancake.v1.Pancake.Update:output_type -> pancake.v1.UpdateResponse
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	7, // 0: pancake.v1.AttestResponse.pcr:type_name -> pancake.v1.AttestResponse.PcrDigest
+	0, // 1: pancake.v1.Pancake.GetCurrentManifest:input_type -> pancake.v1.GetCurrentManifestRequest
+	1, // 2: pancake.v1.Pancake.Update:input_type -> pancake.v1.Manifest
+	3, // 3: pancake.v1.Pancake.Attest:input_type -> pancake.v1.AttestRequest
+	5, // 4: pancake.v1.Pancake.ActivateCredential:input_type -> pancake.v1.ActivateCredentialRequest
+	1, // 5: pancake.v1.Pancake.GetCurrentManifest:output_type -> pancake.v1.Manifest
+	2, // 6: pancake.v1.Pancake.Update:output_type -> pancake.v1.UpdateResponse
+	4, // 7: pancake.v1.Pancake.Attest:output_type -> pancake.v1.AttestResponse
+	6, // 8: pancake.v1.Pancake.ActivateCredential:output_type -> pancake.v1.ActivateCredentialResponse
+	5, // [5:9] is the sub-list for method output_type
+	1, // [1:5] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_internal_orchpb_pancake_proto_init() }
@@ -264,7 +622,7 @@ func file_internal_orchpb_pancake_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_orchpb_pancake_proto_rawDesc), len(file_internal_orchpb_pancake_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

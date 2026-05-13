@@ -1,0 +1,422 @@
+// pancake-os build daemon protocol.        *** PROPOSAL, not wired up ***
+//
+// pancake-build-server runs centrally on an orchestrator host. It does the
+// heavy work that today happens on every client (`pancake bootstrap`
+// on the build host, `pancake install`/`pancake update` inside a VM):
+//
+//   - mmdebstrap / apt-get download
+//   - per-package overlay-snapshot + dpkg --unpack/--configure
+//   - mkfs.ext4 + veritysetup → image.img + image.hash + roothash
+//   - manifest.toml synthesis, signed with one of the daemon's keys
+//
+// Clients call BuildLayer/LookupLayer/GetLayer over gRPC. The daemon
+// caches every built layer on disk forever, keyed by roothash; the
+// reverse index from (pkg, version, suite, arch) → roothash is used
+// to short-circuit BuildLayer when the result is already known.
+//
+// The roothash IS the layer's identity. Two BuildLayer calls with the
+// same spec MUST return the same roothash (assuming the underlying
+// .deb hasn't been re-uploaded upstream). This sidesteps the
+// mkfs.ext4-reproducibility problem from the client-side build path
+// (existing task #33): there is exactly one build per layer, done by
+// the daemon, cached forever — clients never rebuild, they download.
+//
+// Trust:
+//   - Each LayerHandle carries a manifest.toml + manifest.sig where
+//     the sig is RSA-PKCS1v15-SHA256 over manifest.toml under one of
+//     the daemon's signing keys (selected by signing_key_id).
+//   - The roothash inside the manifest.toml is the cryptographic
+//     identity of image.img (verity root). Clients re-verify on
+//     receipt: bytes are streamed → veritysetup format → compare
+//     against manifest.toml's roothash.
+//   - This means GetLayer transport can be untrusted (bytes are
+//     content-addressed). But BuildLayer/BuildGeneration/UploadBlob
+//     are bearer-token authenticated (same systemd-creds sealed
+//     pattern as pancaked uses today; see DefaultSealedTokenPath in
+//     internal/orchsrv).
+//
+// Out of scope for this service:
+//   - `pancake-host` layer. Per-host by definition; clients build it
+//     locally from inputs they shouldn't send to a shared cache.
+//     Contents (post-rework):
+//       /etc/hostname
+//       /etc/machine-id                   (placeholder; systemd
+//                                          regenerates at first boot)
+//       /etc/ssh/ssh_host_*_key{,.pub}
+//       /etc/ssh/sshd_config
+//       /root/.ssh/authorized_keys
+//       /etc/resolv.conf
+//       /etc/systemd/network/10-wired.network
+//   - The orchestrator-side "push manifest to a fleet of VMs"
+//     workflow lives in the existing orchpb Pancake service.
+//     pancake-build-server produces the manifest; orchpb pushes it.
+
+syntax = "proto3";
+
+package pancake.build.v1;
+
+option go_package =
+    "github.com/sinkap/pancake/tools/pancake-go/internal/buildpb";
+
+import "google/protobuf/timestamp.proto";
+
+// ============================================================================
+// Service
+// ============================================================================
+
+service PancakeBuilder {
+  // BuildLayer returns the canonical artifact for `spec`, building it
+  // on demand if not cached. Idempotent. Synchronous: large package
+  // sets can take seconds (apt fetch + mkfs.ext4 + veritysetup); use
+  // a generous client deadline (>= 60s).
+  rpc BuildLayer(BuildLayerRequest) returns (LayerHandle);
+
+  // LookupLayer is the cache-only variant: returns NOT_FOUND if the
+  // server hasn't built this spec before. Useful for an orchestrator
+  // assembling a generation manifest without paying build cost.
+  rpc LookupLayer(LookupLayerRequest) returns (LayerHandle);
+
+  // BuildGeneration is BuildLayer many-at-once + assembles a signed
+  // GenerationManifest ready to push via orchpb.Pancake.Update.
+  // Layers are built/looked up in parallel server-side; the response
+  // includes a LayerHandle for each so callers can prefetch missing
+  // bytes via GetLayer at the destination.
+  rpc BuildGeneration(BuildGenerationRequest) returns (GenerationManifest);
+
+  // GetLayer streams artifact bytes for a previously built layer.
+  // Identified by roothash (canonical). Use BuildLayer/LookupLayer to
+  // resolve a spec → roothash first.
+  rpc GetLayer(GetLayerRequest) returns (stream LayerChunk);
+
+  // UploadBlob streams arbitrary bytes (a kernel bzImage, a modules
+  // tarball, a pancaked binary) and returns the sha256. The returned
+  // digest is then referenced from a LayerSpec's synthetic variant.
+  // Idempotent: re-uploading the same bytes returns the same digest
+  // and writes nothing.
+  rpc UploadBlob(stream BlobChunk) returns (BlobReference);
+
+  // ListLayers enumerates the cache. Optional name filter. No
+  // pagination yet — caches stay in the low thousands.
+  rpc ListLayers(ListLayersRequest) returns (ListLayersResponse);
+}
+
+// ============================================================================
+// Package (the unit of "what to build")
+// ============================================================================
+
+// Package is one layer's worth of "install via a package manager".
+// Every layer this service knows how to build is a Package. The oneof
+// dispatches to the right builder:
+//   - apt:      mmdebstrap-style fetch + overlay-snapshot of one .deb
+//   - internal: pancake's own layer types (state, runtime, kernel, ...)
+//
+// The oneof leaves room to add RPM / Snap / Flatpak / AUR / etc.
+// without breaking existing wire shape.
+
+message Package {
+  oneof manager {
+    APT             apt      = 1;
+    PancakeInternal internal = 2;
+    // future: RPM rpm = 3;  Snap snap = 4;  ...
+  }
+}
+
+message APT {
+  string name    = 1;   // "openssh-server" — required
+  string version = 2;   // "1:9.6p1-3ubuntu13.16" — empty = suite latest
+                        // (server pins the resolved version into the
+                        // returned manifest's [package].version)
+  string suite   = 3;   // "noble" — required
+  string arch    = 4;   // "amd64" — empty defaults to "amd64"
+  string mirror  = 5;   // optional override for the apt mirror URL
+}
+
+// PancakeInternal is "a package built by pancake itself" — a
+// synthetic layer that doesn't come from any third-party package
+// manager. The set of valid internal layer kinds is data-driven,
+// not schema-encoded: each kind is a `recipe` name registered
+// server-side and described in a text-proto catalog (see
+// internal_layers.textproto). Adding a new internal layer = a data
+// change in the catalog + a builder handler in Go, with no .proto
+// edit.
+//
+// pancake-host is NOT a recipe here — it's per-host (see file
+// header) and built client-side.
+//
+// Today the registered recipes are:
+//
+//   recipe="base"
+//     "Cross-cutting baseline files for a package set" — the ~36
+//     files no individual .deb owns: identity tables (passwd/shadow/
+//     group), PAM common-* configs, netbase defaults (/etc/hosts,
+//     /etc/networks), base-files defaults (/etc/profile, /etc/fstab,
+//     etc.).
+//     Inputs:  packages (required, sorted; suite/arch on each entry,
+//              all entries must share suite + arch).
+//     Roothash: function of sorted package list.
+//
+//   recipe="runtime"
+//     "pancake CLI + helpers + systemd units" — the pancake layer.
+//     Contents: /usr/local/bin/pancake, /usr/sbin/{mount-overlay,
+//     pivot-root}, /etc/systemd/system/pancake-{debug,state-rw,
+//     ldconfig,hwdb}.service (+ MUTW symlinks), and optional
+//     /etc/pancake/manifest.pubkey.
+//     Inputs:  blobs["pancake-binary"]        required
+//              blobs["mount-overlay-binary"]  required
+//              blobs["pivot-root-binary"]     required
+//              blobs["manifest-pubkey"]       optional
+//
+//   recipe="kernel"
+//     "/boot/vmlinuz from an uploaded bzImage."
+//     Inputs:  version           required
+//              blobs["bzimage"]  required
+//
+//   recipe="modules"
+//     "/lib/modules/<ver> from an uploaded tarball."
+//     Inputs:  version           required
+//              blobs["tarball"]  required
+//
+//   recipe="pancaked"
+//     "/usr/sbin/pancaked + systemd unit."
+//     Inputs:  version           required
+//              blobs["binary"]   required
+//
+// Per-layer roothash semantics: bytes-identical inputs → identical
+// roothash, so the cache works the same way as for APT layers.
+//
+// The two services in the runtime layer worth calling out:
+//   - pancake-ldconfig.service runs `ldconfig` at early boot to
+//     regenerate /etc/ld.so.cache in the writable overlay (avoids
+//     shipping it in any verity layer — its content depends on
+//     libraries from every layer).
+//   - pancake-hwdb.service runs `systemd-hwdb update` to regenerate
+//     /usr/lib/udev/hwdb.bin in the overlay (12 MiB savings vs.
+//     shipping it).
+//
+// Build-time-only packages (apt, dpkg, libapt-pkg6.0t64, gpgv,
+// debian-archive-keyring) are installed into the sandbox during the
+// "base" recipe's build but produce no layer of their own; their
+// files are also stripped from the base layer.
+message PancakeInternal {
+  // Recipe name. Must match a recipe registered in the server's
+  // catalog. Server returns INVALID_ARGUMENT if unknown, or if the
+  // inputs don't satisfy the recipe's required/optional fields.
+  string recipe = 1;
+
+  // Inputs. Which fields a given recipe consumes is determined by
+  // the recipe definition; unused fields must be empty.
+  repeated APT packages       = 2;  // recipes that take a pkg set
+  map<string, string> blobs   = 3;  // role-name → sha256 (from UploadBlob)
+  string version              = 4;  // recipes that take a version
+}
+
+// ============================================================================
+// Layer artifacts (output)
+// ============================================================================
+
+// LayerHandle is the server's response to a successful build/lookup.
+// It carries the signed manifest bytes plus convenience scalars so
+// callers don't have to parse TOML for the common case.
+message LayerHandle {
+  // Canonical identity. The client uses this for GetLayer and as the
+  // primary key in its local cache (kit/repo/<roothash>/ would be a
+  // sane on-disk layout; today's <pkg>-<slug> is preserved as a
+  // friendly secondary index — see `name`/`version` below).
+  string roothash = 1;
+
+  // Signed per-layer manifest. manifest_sig is RSA-PKCS1v15-SHA256
+  // over manifest_toml under signing_key_id.
+  bytes  manifest_toml  = 2;
+  bytes  manifest_sig   = 3;
+  string signing_key_id = 4;
+
+  // Convenience (parsed from manifest_toml; redundant but lets clients
+  // skip TOML parsing for `pancake list`-style enumeration):
+  string name      = 5;
+  string version   = 6;
+  string arch      = 7;
+  int64  data_size = 8;   // image.img bytes
+  int64  hash_size = 9;   // image.hash bytes
+  google.protobuf.Timestamp built_at = 10;
+}
+
+// ============================================================================
+// RPC requests/responses
+// ============================================================================
+
+message BuildLayerRequest {
+  Package package = 1;
+  // Optional: name of one of the daemon's signing keys to sign with.
+  // Empty = the daemon's default key. The chosen key's pubkey must be
+  // enrolled at the client (typically via initramfs-baked
+  // /etc/pancake/manifest.pubkey).
+  string signing_key_id = 2;
+}
+
+message LookupLayerRequest {
+  Package package = 1;
+}
+
+message BuildGenerationRequest {
+  // Packages in DESIRED OVERLAY ORDER (leftmost wins). Server builds
+  // each (or pulls from cache) and assembles them into a generation
+  // manifest in the same order.
+  repeated Package packages = 1;
+
+  int32  parent      = 2;   // 0 = new lineage
+  int32  counter     = 3;   // 0 = server picks (max(prev)+1)
+  string description = 4;
+
+  string signing_key_id = 5;
+}
+
+// GenerationManifest: the bytes the VM writes to generations/<id>/.
+// Same wire shape as orchpb.Manifest so it can be passed straight to
+// orchpb.Pancake.Update.
+message GenerationManifest {
+  bytes manifest_toml = 1;
+  bytes manifest_sig  = 2;
+  bytes lowers        = 3;
+
+  // Convenience: a handle for each layer the manifest references, in
+  // overlay order. Lets callers prefetch missing bytes at the
+  // destination via GetLayer.
+  repeated LayerHandle layer = 4;
+
+  int32  generation_id  = 5;
+  int32  counter        = 6;
+  string signing_key_id = 7;
+}
+
+message GetLayerRequest {
+  string roothash = 1;
+  // Resumable transfer. offset/length apply to the IMAGE part only;
+  // HASH/MANIFEST/ROOTHASH parts are always sent in full.
+  int64  offset   = 2;
+  int64  length   = 3;   // 0 = until end
+  // Subset of parts to send. Empty = all four.
+  repeated LayerPart want = 4;
+}
+
+enum LayerPart {
+  LAYER_PART_UNSPECIFIED = 0;
+  LAYER_PART_IMAGE       = 1;  // image.img (data + verity tree)
+  LAYER_PART_HASH        = 2;  // image.hash (verity hash tree)
+  LAYER_PART_MANIFEST    = 3;  // manifest.toml + manifest_sig
+  LAYER_PART_ROOTHASH    = 4;  // image.roothash sidecar (one line)
+}
+
+message LayerChunk {
+  LayerPart part = 1;
+  bytes     data = 2;
+  bool      last = 3;     // last chunk for this part
+  // For LAYER_PART_IMAGE: file offset where `data` begins. Server
+  // walks the cached image.img with SEEK_DATA/SEEK_HOLE and only
+  // sends data ranges; clients use WriteAt(data, offset) and a
+  // final Truncate(DataSize) to recreate the sparse file. Saves
+  // ~3× wire bandwidth + on-disk size for large ext4 images that
+  // are mostly hole. For other parts (HASH/MANIFEST/ROOTHASH),
+  // offset is ignored and chunks are sent contiguously.
+  int64     offset = 4;
+}
+
+message ListLayersRequest {
+  string name_prefix = 1; // empty = no filter
+}
+
+message ListLayersResponse {
+  repeated LayerHandle layer = 1;
+}
+
+// ============================================================================
+// Blobs (uploads for synthetic kernel/modules/pancaked)
+// ============================================================================
+
+message BlobChunk {
+  bytes data = 1;
+  bool  last = 2;
+}
+
+message BlobReference {
+  string sha256 = 1;
+  int64  size   = 2;
+}
+
+// ============================================================================
+// Internal-layer recipe catalog (config, NOT wire RPC)
+// ============================================================================
+//
+// These messages never appear on a PancakeBuilder RPC. They exist
+// so the catalog file (internal_layers.textproto) parses through
+// protobuf text-format tools. The server loads the catalog at
+// startup, validates incoming PancakeInternal requests against it,
+// and dispatches to the registered Go handler for each `recipe`.
+
+message Catalog {
+  repeated Recipe recipe = 1;
+}
+
+message Recipe {
+  // Recipe name. Matches PancakeInternal.recipe on the wire.
+  string name = 1;
+  string description = 2;
+
+  // Which inputs the recipe consumes. The server enforces:
+  //   - if requires_packages, PancakeInternal.packages must be non-empty
+  //   - if requires_version,  PancakeInternal.version  must be non-empty
+  //   - every required_blobs role must have an entry in
+  //     PancakeInternal.blobs; optional_blobs may or may not
+  //   - any blob role NOT in required_blobs ∪ optional_blobs is an error
+  bool requires_packages = 3;
+  bool requires_version  = 4;
+  repeated string required_blobs = 5;
+  repeated string optional_blobs = 6;
+}
+
+// ============================================================================
+// Open design questions — please mark up before I implement.
+// ============================================================================
+//
+// Q1. Per-layer signing vs. only generation-manifest signing?
+//     This proposal signs each layer's manifest.toml independently,
+//     which is strictly more secure (clients can verify any
+//     individually-pulled layer) but doubles the signing surface and
+//     means ALL clients need the per-layer pubkey enrolled, not just
+//     the gen-manifest one. Today the gen manifest references layers
+//     by relative-path, with no per-layer signature — initramfs
+//     trusts a layer if its parent gen manifest is signed. The
+//     proposal changes this: per-layer sig becomes mandatory.
+//     Alternative: keep only gen-manifest signing, embed each layer's
+//     roothash directly in the gen manifest, drop manifest_sig from
+//     LayerHandle.
+//
+// Q2. Synthetic layer roothash sensitivity to `version` field?
+//     If two SyntheticKernel calls upload the same bzImage bytes but
+//     differ only in the `version` string, do they produce the same
+//     or different roothashes? Today the version goes into manifest
+//     [package].version which is INSIDE image.img (no — manifest is
+//     OUTSIDE image.img, sidecar). So bytes-only keying is fine and
+//     yields the same roothash for two version strings. Confirm?
+//
+// Q3. Where does the daemon's signing key live, and how do we rotate?
+//     Two natural places: bare PEM on disk under a dir the daemon
+//     reads (/etc/pancake-build-server/keys/<id>.pem), or via systemd-creds
+//     sealed (TPM-bound, like pancaked's bearer token). The latter
+//     binds the daemon's signing identity to the host's boot chain.
+//
+// Q4. Auth model for clients?
+//     Three classes of caller:
+//       (a) `pancake bootstrap` on the build host — interactive user.
+//       (b) `pancake install/update` inside a VM — fleet member.
+//       (c) An orchestrator pre-warming the cache before a fleet push.
+//     Proposed: same bearer-token pattern as pancaked, with
+//     write-RPCs (BuildLayer, BuildGeneration, UploadBlob) requiring
+//     auth and read-RPCs (LookupLayer, GetLayer, ListLayers) open.
+//     Open in the sense of "no token required" — bytes are
+//     content-addressed and signed, so confidentiality isn't the goal.
+//
+// Q5. Naming?
+//     Daemon binary: `pancake-build-server` (matches `pancaked`).
+//     Package: `internal/buildpb`, `server`.
+//     Service name: `PancakeBuilder`.
+//     Default port: 7879? (pancaked uses 7878.)

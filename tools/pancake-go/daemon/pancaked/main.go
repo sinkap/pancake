@@ -28,8 +28,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/orchsrv"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/orchsrv"
 )
 
 func main() {

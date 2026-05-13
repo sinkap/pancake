@@ -22,9 +22,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/runner"
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/sandbox"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/sandbox"
 )
 
 func cmdSwap(k *kit.Kit, args []string) int {

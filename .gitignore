@@ -28,3 +28,4 @@ vm/keys/
 # Build object files
 *.o
 *.a
+initramfs/mount-overlay

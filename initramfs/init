@@ -148,13 +148,27 @@ if [ -r "$PUBKEY" ]; then
         fi
     fi
 
-    # Best-effort PCR 13 extend so attestation / future cryptenroll
-    # policies can bind to which generation booted.
-    if command -v tpm2_pcrextend >/dev/null 2>&1 && [ -e /dev/tpmrm0 -o -e /dev/tpm0 ]; then
+    # PCR 13 = sha256(manifest.toml). Bound to attestation: the
+    # remote verifier compares against sha256 it computed from the
+    # manifest the build server produced. HARD FAIL on signed kits
+    # — if we got this far (manifest.pubkey present, signature
+    # verified, TPM present), measurement is mandatory. Soft-fail
+    # only when no TPM is in the system.
+    if [ -e /dev/tpmrm0 ] || [ -e /dev/tpm0 ]; then
+        if ! command -v tpm2_pcrextend >/dev/null 2>&1; then
+            echo "[init] FATAL: signed kit + TPM present but tpm2_pcrextend missing"
+            echo "[init]        — initramfs build is broken (add tpm2-tools)."
+            exec /bin/sh
+        fi
         h=$(sha256sum "$MANIFEST" | awk '{print $1}')
-        tpm2_pcrextend "13:sha256=$h" >/dev/null 2>&1 \
-            && echo "[init] PCR 13 extended with manifest hash ${h:0:16}…" \
-            || true
+        if ! tpm2_pcrextend "13:sha256=$h" 2>/tmp/pancake-pcr13.err; then
+            echo "[init] FATAL: tpm2_pcrextend PCR 13 failed:"
+            cat /tmp/pancake-pcr13.err
+            exec /bin/sh
+        fi
+        echo "[init] PCR 13 extended with manifest hash ${h:0:16}…"
+    else
+        echo "[init] no TPM present, skipping PCR 13 extend"
     fi
 else
     echo "[init] no /etc/pancake/manifest.pubkey baked in — skipping manifest verification"
@@ -165,6 +179,27 @@ LOWERS_FILE="/pancake-state/current/lowers"
     echo "[init] FATAL: $LOWERS_FILE missing — is the state partition initialised?"
     exec /bin/sh
 }
+
+# PCR 14 = sha256(lowers TSV). The lowers file is a faithful
+# enumeration of every layer (slug, image, hash, roothash) the
+# generation will mount. Hashing the file binds all those roothashes
+# into a single quotable PCR — a remote verifier can compute the
+# same hash from the manifest's lowers and confirm the live system
+# is really running the layer set the orchestrator approved.
+# Same hard-fail discipline as PCR 13.
+if [ -e /dev/tpmrm0 ] || [ -e /dev/tpm0 ]; then
+    if ! command -v tpm2_pcrextend >/dev/null 2>&1; then
+        echo "[init] FATAL: TPM present but tpm2_pcrextend missing — cannot extend PCR 14"
+        exec /bin/sh
+    fi
+    lh=$(sha256sum "$LOWERS_FILE" | awk '{print $1}')
+    if ! tpm2_pcrextend "14:sha256=$lh" 2>/tmp/pancake-pcr14.err; then
+        echo "[init] FATAL: tpm2_pcrextend PCR 14 failed:"
+        cat /tmp/pancake-pcr14.err
+        exec /bin/sh
+    fi
+    echo "[init] PCR 14 extended with lowers hash ${lh:0:16}…"
+fi
 
 # Stage tmpfs for the overlay's upper / work.
 mount -t tmpfs -o mode=755 tmpfs /upper-tmp

@@ -1,4 +1,4 @@
-# fs-pancake / pancake-os
+# pancake / pancake-os
 
 A Debian-derived OS where every package is its own dm-verity image and the
 rootfs is reassembled atomically via `pivot_root(2)`.
@@ -31,16 +31,16 @@ content. No reboot, no systemd cooperation, no per-daemon hooks.
 ## Layout
 
 ```
-fs-pancake/
+pancake/
 ├── pivot-root.c              the kernel-syscall helper for the live swap
 ├── slides.md                 walkthrough deck (Marp markdown)
 ├── DESIGN.md                 architecture + manifest schema + workflows
 │
-└── tools/pancake-go/         Go module — ONE static binary, all subcommands
-    ├── cmd/pancake               list / history / show / activate / rollback /
-    │                             install / swap / build / bootstrap
-    └── internal/                 runner, kit, deb, layer, sandbox, pack,
-                                  initramfs (shared library code)
+├── tools/pancake-go/         Go module
+│   ├── cmd/pancake/              the operator CLI
+│   ├── daemon/pancaked/          in-VM agent daemon
+│   ├── server/                   build server (lib + cmd/main.go + Dockerfile)
+│   └── internal/                 buildpb, orchpb, orchsrv, deb, kit, layer, ...
 │
 └── initramfs/                manifest-driven /init
     ├── init                      reads /var/lib/pancake/current/lowers,
@@ -67,17 +67,136 @@ Lands in Linux 7.2.
 
 ## Quick start
 
-### 0. Build the CLI (one-time per checkout)
+### TL;DR — one-shot demo
+
+```sh
+demo/demo.sh --bzimage=/path/to/bpf-next/arch/x86/boot/bzImage
+```
+
+Builds binaries → builds + starts the build-server container with a
+named cache volume → bootstraps a signed UEFI kit → boots it under
+OVMF + swtpm → runs `pancake enroll` inside the VM → runs `pancake
+attest` from the host (5 checks). Idempotent — re-running tears down
+prior state. ~3 min cold, <30 s on cache hit.
+
+Requirements: `docker`, `qemu-system-x86_64`, OVMF firmware, `swtpm`,
+`tpm2-tools`, `nc`, `go`.
+
+### 0. Build the binaries (one-time per checkout)
+
+The Go module produces three statically-linked binaries:
 
 ```sh
 cd tools/pancake-go
-go build -ldflags="-s -w" -o ./bin/ ./cmd/pancake
-# → ONE 2.6 MB statically-linked ELF: bin/pancake
-# All subcommands live under it: list, history, show, activate, rollback,
-# install, swap, build, bootstrap. No python, no runtime deps.
+go build -ldflags="-s -w" -o bin/pancake              ./cmd/pancake
+go build -ldflags="-s -w" -o bin/pancaked             ./daemon/pancaked
+go build -ldflags="-s -w" -o bin/pancake-build-server ./server/cmd
 ```
 
+| Binary | Where it runs | What it does |
+|---|---|---|
+| `pancake` | build host + inside the VM | the CLI: `bootstrap`, `list`, `show`, `install`, `swap`, `rollback`, `enroll`, `orchestrate`, `build` |
+| `pancaked` | inside each pancake-os VM | gRPC agent; receives signed manifests from the orchestrator and applies them |
+| `pancake-build-server` | a persistent build host (e.g. a containerized service) | gRPC builder; runs `mmdebstrap` + per-package layer construction once, caches by roothash, serves cached artifacts over `GetLayer` |
+
+Tree layout, for orientation:
+
+```
+tools/pancake-go/
+├── cmd/pancake/             # the operator CLI
+├── daemon/pancaked/         # in-VM agent daemon
+├── server/                  # build server: lib in package "server"
+│   ├── server.go, build.go, stream.go, filters.go
+│   ├── cmd/main.go          #   server binary entry point
+│   └── Dockerfile           #   container image with persistent cache volume
+└── internal/
+    ├── buildpb/             # build server gRPC schema + recipe catalog
+    ├── orchpb/              # orchestrator/agent gRPC schema
+    ├── orchsrv/             # in-VM agent's RPC handlers
+    └── ... (deb, kit, layer, runner, sign, ...)
+```
+
+### 0b. Run the build server (recommended)
+
+The build server centralizes the heavy work — `mmdebstrap`, per-package
+verity layer construction, `mkfs.ext4` / `veritysetup` — and caches every
+built layer keyed by roothash. Clients (`pancake bootstrap` on the build
+host, `pancake install/update` inside a VM) call into it over gRPC and
+download canonical bytes instead of rebuilding.
+
+**Easiest: run the server in Docker** with a persistent host volume so
+the layer cache survives container restarts:
+
+```sh
+docker build -f tools/pancake-go/server/Dockerfile \
+             -t pancake-build-server tools/pancake-go/
+
+docker volume create pancake-build-cache       # or use a host bind mount
+docker run -d --name pancake-build-server \
+    --privileged \
+    -p 7879:7879 \
+    -v pancake-build-cache:/var/lib/pancake-build-server \
+    pancake-build-server
+```
+
+`--privileged` is required because `mmdebstrap` does chroot + bind-mount
+and `veritysetup` uses device-mapper. (Tightly-scoped capability sets
+work too — see the Dockerfile header.)
+
+**Or run directly on a host** with the right tools installed
+(`mmdebstrap`, `e2fsprogs`, `cryptsetup-bin`, `dpkg`, `sudo`):
+
+```sh
+sudo ./tools/pancake-go/bin/pancake-build-server \
+    -listen=:7879 \
+    -cache=/var/lib/pancake-build-server
+```
+
+The server logs `[pancake-build-server] listening on :7879, cache=…` on
+start. Until a healthcheck RPC exists, `nc -z host 7879` is the basic
+up-check.
+
 ### 1. Build a kit + disk image + initramfs in one command
+
+The clean way is a TOML recipe — one file instead of 21 flags. Save as
+`./pancake-recipe.toml` and `sudo pancake bootstrap` picks it up
+automatically; otherwise pass the path positionally.
+
+```toml
+# ./pancake-recipe.toml
+output   = "/var/tmp/pancake-kit"
+hostname = "pancake"
+packages = ["openssh-server", "chrony", "nano"]
+
+[distro]
+suite = "noble"
+
+[ssh]
+authorized-keys = "~/.ssh/authorized_keys"
+
+[kernel]
+version = "tree"   # read it out of bzimage; or pin "7.0.0-g..." literally
+bzimage = "~/projects/linux-bpf-for-next/arch/x86/boot/bzImage"
+
+[outputs]
+image     = "/var/tmp/pancake-state.img"
+initramfs = "/var/tmp/pancake-initramfs.cpio.gz"
+bzimage   = "/var/tmp/pancake-bzImage"
+```
+
+```sh
+sudo tools/pancake-go/bin/pancake bootstrap          # uses ./pancake-recipe.toml
+sudo tools/pancake-go/bin/pancake bootstrap path/to/other.toml
+sudo tools/pancake-go/bin/pancake bootstrap recipe.toml --hostname=other
+                                                     # CLI flag wins over recipe
+```
+
+CLI flag > recipe value > built-in default. `~` expands to the invoking
+user's home (honors `SUDO_USER`, not `/root`). Unknown TOML keys cause
+a parse error so typos are caught up front. The full schema is the
+package doc on `internal/recipe`.
+
+The equivalent flag-only invocation:
 
 ```sh
 sudo tools/pancake-go/bin/pancake bootstrap \
@@ -108,6 +227,60 @@ sudo tools/pancake-go/bin/pancake bootstrap \
 | `--sign-cert` | `""` (off) | PEM X.509 cert matching `--sign-key`. Both files are auto-generated as a self-signed dev pair if neither exists yet. |
 
 Pass an empty string to skip any one step (e.g. `--image=""`).
+
+**With a build server (faster, deduped fleetwide):** add `--builder=<host:port>`
+to delegate `mmdebstrap` + per-package layer construction to a running
+`pancake-build-server`. The client still produces `pancake-host`,
+`pancake-runtime`, `pancake-kernel`, `pancake-modules` locally (per-host
+identity + build-host-specific bytes); everything else streams in via
+`GetLayer` from the server cache.
+
+```sh
+sudo tools/pancake-go/bin/pancake bootstrap \
+    --builder=localhost:7879 \
+    pancake-recipe.toml
+```
+
+A fresh build is dominated by the server's mmdebstrap (~2-3 minutes for
+~150 packages); subsequent runs against the same package set hit the
+roothash-keyed cache and finish in seconds.
+
+### Layer landscape
+
+A built kit has these top-of-stack layers in addition to the per-`.deb`
+ones:
+
+| Layer | Built by | Contents |
+|---|---|---|
+| `pancake-host` | client | hostname, ssh keys, `/root/.ssh/authorized_keys`, `sshd_config`, `resolv.conf`, `10-wired.network`, `machine-id` placeholder |
+| `pancake-runtime` | client | pancake CLI binary, `mount-overlay`/`pivot-root` C helpers, `pancake-{state-rw,debug}.service` units, the `pancake-defaults` systemd generator that enables networkd at boot |
+| `pancake-base` | server | the ~36 cross-cutting baseline files no individual `.deb` owns: `/etc/passwd`/`shadow`/`group`/PAM common-* / `/etc/hosts` / `/etc/profile` / etc. Deterministic from the sorted package set. |
+| `pancake-kernel` | client | `/boot/vmlinuz` from a custom `--bzimage` |
+| `pancake-modules` | client | `/lib/modules/<ver>/` from the build host |
+| `pancaked` | client | the agent daemon binary + systemd unit |
+
+Things deliberately **not** in any verity layer (regenerated per boot
+or dropped entirely): `/var/lib/dpkg/`, `/etc/apt/`, `/var/lib/ucf/`,
+`/usr/share/{man,info,doc}/`, the `apt`/`dpkg` package payloads (build-only),
+`/etc/ld.so.cache` and `/usr/lib/udev/hwdb.bin` (regenerated by
+boot-time services in `pancake-runtime`).
+
+### `pancake-host` — the per-host identity layer
+
+Per-host content lives in its own verity layer at `kit/repo/pancake-host/`,
+pinned at the top of the overlay stack. It contains exactly:
+
+- `/etc/hostname`
+- `/etc/ssh/ssh_host_*_key{,.pub}` (from `[ssh] host-keys-dir`, else
+  generated fresh)
+- `/root/.ssh/authorized_keys` (from `[ssh] authorized-keys`, optional)
+
+Bootstrap filters these paths out of every other layer (base-files,
+openssh-server, pancake-state) via an `isPerHostPath` predicate, so the
+shared layers' roothashes are a function of the .deb set and the recipe
+only — not of which host you ran bootstrap on. That's the precondition
+for an orchestrator shipping one fleetwide manifest while each node
+keeps its own pancake-host pinned in place.
 
 ### `pancaked` — the update daemon
 
@@ -164,6 +337,49 @@ token via `--token-file`:
 pancake orchestrate push --target VM:7878 --kit ./kit --gen-id N \
     --token-file ~/secrets/vm-orch-token
 ```
+
+### Remote attestation (`pancake attest`)
+
+`pancaked` provisions a per-boot AK + EK at startup and exposes an
+`Attest(nonce, pcrs[])` RPC. On the operator side, `pancake attest`
+runs five checks against the response:
+
+```sh
+# in-VM (one-time per host; folded into pancake enroll):
+pancake enroll        # also writes /etc/pancake/ek.pub
+
+# operator side:
+scp root@vm:/etc/pancake/ek.pub ./vm-ek.pub
+pancake attest --target=vm:7878 --ek-pub=./vm-ek.pub --kit=./kit --gen=N
+```
+
+```
+[attest] OK    EK pubkey matches enrolled
+[attest] OK    credential activation (AK is in same TPM as enrolled EK)
+[attest] OK    quote signature valid (AK signed nonce + PCRs)
+[attest] OK    PCR 13 = extend(sha256(manifest.toml))
+[attest] OK    PCR 14 = extend(sha256(lowers))
+[attest] INFO  PCR 11 firmware-event-log replay (12 firmware entries):
+  [34] PCR11 sha256=0da293e3… event=".linux"
+  [35] PCR11 sha256=04b7730f… event=".linux"
+  [36] PCR11 sha256=3fb9e4e3… event=".osrel"
+  [37..] event=".cmdline" .initrd .uname
+[attest] OVERALL PASS
+```
+
+What each check means:
+
+| Check | What it proves |
+|---|---|
+| EK pubkey | Same TPM as the one we registered at enroll time |
+| Credential activation | Cryptographic AK ↔ EK binding (`tpm2_makecredential` + `tpm2_activatecredential` round-trip) — not just byte-equality |
+| Quote signature | The TPM signed (PCRs ‖ nonce) under AK; not replayable |
+| PCR 13 | The exact `manifest.toml` we expected this VM to run was loaded by initramfs |
+| PCR 14 | The exact lowers TSV (every layer's roothash) was loaded |
+| PCR 11 (INFO) | UKI sections loaded by systemd-stub (`.linux`, `.initrd`, `.cmdline`, `.osrel`, `.uname`) — replay the firmware event log to derive the value the UKI alone produces; live PCR 11 typically extends further from userspace (`systemd-pcrextend`), so this is reported as INFO not strict equality |
+
+Tamper a layer → PCR 14 mismatch. Swap kernel → PCR 11 firmware-replay
+diverges from what `--kit` claims. Both flagged.
 
 ### Push updates: orchestrator → VM via gRPC
 
@@ -353,6 +569,6 @@ rollback workflows.
 ## Slides
 
 ```
-github.com/sinkap/fs-pancake/blob/main/slides.md   # source
-github.com/sinkap/fs-pancake/blob/main/slides.pdf  # rendered
+github.com/sinkap/pancake/blob/main/slides.md   # source
+github.com/sinkap/pancake/blob/main/slides.pdf  # rendered
 ```

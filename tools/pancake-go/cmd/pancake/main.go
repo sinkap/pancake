@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/sinkap/fs-pancake/tools/pancake-go/internal/kit"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
 )
 
 func usage() {
@@ -72,7 +72,7 @@ func main() {
 	// the global --kit dir for them.
 	var k *kit.Kit
 	switch sub {
-	case "bootstrap", "build", "orchestrate":
+	case "bootstrap", "build", "orchestrate", "attest":
 		// nil kit; subcommand owns its own paths
 	default:
 		var err error
@@ -107,6 +107,8 @@ func main() {
 		rc = cmdEnroll(k, args)
 	case "orchestrate":
 		rc = cmdOrchestrate(k, args)
+	case "attest":
+		rc = cmdAttest(k, args)
 	default:
 		fmt.Fprintf(os.Stderr, "pancake: unknown subcommand %q\n", sub)
 		usage()
