@@ -17,6 +17,9 @@
 #   demo.sh --auth-key=PATH                    (default: ~/.ssh/id_ed25519.pub)
 #   demo.sh --port=N                           (host SSH forward, default 2230)
 #   demo.sh --skip-attest                      (boot only, leave running)
+#   demo.sh --snp                              (launch as SEV-SNP confidential
+#                                              guest; requires kvm_amd.sev_snp=1
+#                                              and SEV-enabled OVMF on the host)
 #
 # Required tools on the host:
 #   docker, qemu-system-x86_64, OVMF firmware (/usr/share/OVMF/OVMF_*.fd),
@@ -31,6 +34,7 @@ AUTH_KEY="${HOME}/.ssh/id_ed25519.pub"
 SSH_PORT=2230
 GRPC_PORT=7878
 SKIP_ATTEST=0
+SNP=0
 
 for arg in "$@"; do
     case "$arg" in
@@ -38,6 +42,7 @@ for arg in "$@"; do
         --auth-key=*)   AUTH_KEY="${arg#*=}" ;;
         --port=*)       SSH_PORT="${arg#*=}" ;;
         --skip-attest)  SKIP_ATTEST=1 ;;
+        --snp)          SNP=1 ;;
         -h|--help)
             sed -n '2,32p' "$0"; exit 0 ;;
         *) echo "unknown arg: $arg" >&2; exit 2 ;;
@@ -155,9 +160,39 @@ sudo swtpm socket --tpm2 --tpmstate dir="$SWTPM_STATE" \
 sudo cp /usr/share/OVMF/OVMF_VARS_4M.fd "$OVMF_VARS"
 sleep 0.3
 
-say "boot pancake-os under OVMF + swtpm (sshd on host port $SSH_PORT)"
+# Pick OVMF firmware. Plain 4M is fine for non-SNP. For --snp we
+# prefer an SEV-built variant (OVMF.amdsev.fd / OVMF_CODE_4M_SEV.fd
+# depending on the distro); fall back to the standard one if the SEV
+# build isn't installed (the launch will likely fail then — caller
+# will see the QEMU error and know to install ovmf.amdsev or build
+# edk2 with -DSEV_ENABLE).
+OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+if [ "$SNP" = 1 ]; then
+    for c in /usr/share/OVMF/OVMF.amdsev.fd \
+             /usr/share/OVMF/OVMF_CODE_4M_SEV.fd \
+             /usr/share/edk2/x64/OVMF.amdsev.fd; do
+        if [ -r "$c" ]; then OVMF_CODE="$c"; break; fi
+    done
+    say "SNP requested — using OVMF: $OVMF_CODE"
+    [ -e /dev/sev ] || echo "  WARN: /dev/sev missing — host kernel may not have kvm_amd.sev_snp=1"
+fi
+
+# Assemble SNP-specific QEMU args (empty when --snp not set).
+SNP_ARGS=()
+if [ "$SNP" = 1 ]; then
+    SNP_ARGS=(
+        -machine "q35,confidential-guest-support=sev0,memory-backend=ram1,kernel-irqchip=split"
+        -object  "memory-backend-memfd,id=ram1,size=4G,share=true,prealloc=false"
+        -object  "sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=1"
+    )
+else
+    SNP_ARGS=(-machine q35)
+fi
+
+say "boot pancake-os under OVMF + swtpm$([ "$SNP" = 1 ] && echo " + SEV-SNP") (sshd on host port $SSH_PORT)"
 sudo qemu-system-x86_64 -enable-kvm -cpu host -m 4G -smp 4 \
-    -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+    "${SNP_ARGS[@]}" \
+    -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,file="$OVMF_VARS" \
     -drive file="$EFI_IMG",format=raw,if=virtio \
     -netdev user,id=net0,hostfwd=tcp::"$SSH_PORT"-:22,hostfwd=tcp::"$GRPC_PORT"-:7878 \
@@ -193,12 +228,15 @@ ssh $SSH_OPTS -p "$SSH_PORT" root@localhost "cat /etc/pancake/ek.pub" > "$EK_PUB
 echo "  EK pulled to host: $EK_PUB ($(wc -c < "$EK_PUB") bytes)"
 
 # ---------- attest from host ---------------------------------------
-say "pancake attest from host (5 checks: EK / cred-activation / quote / PCR 13 / PCR 14 + PCR 11 info)"
+ATTEST_MODE=tpm
+[ "$SNP" = 1 ] && ATTEST_MODE=both
+say "pancake attest from host (--mode=$ATTEST_MODE)"
 sudo "$PANCAKE" attest \
     --target=localhost:"$GRPC_PORT" \
     --ek-pub="$EK_PUB" \
     --kit="$KIT" \
-    --gen=1 2>&1 | sed 's/^/  /'
+    --gen=1 \
+    --mode="$ATTEST_MODE" 2>&1 | sed 's/^/  /'
 
 say "demo done"
 echo "  artifacts:    $WORK"
