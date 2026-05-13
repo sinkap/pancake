@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/deb"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/layer"
@@ -26,6 +27,7 @@ import (
 	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
@@ -48,6 +50,11 @@ type Opts struct {
 	TokenFile    string // plaintext bearer token file (optional)
 	TPMTokenFile string // systemd-creds-sealed token file (optional, mutually
 	// exclusive with TokenFile)
+	// Builder is the address (host:port) of a pancake-build-server.
+	// When set, missing-layer fetches in Update() pull bytes from
+	// the build server's GetLayer instead of trying the in-VM
+	// apt-rebuild path. Empty = no auto-fetch.
+	Builder string
 }
 
 // Serve starts the gRPC server. Blocks until the listener errors.
@@ -94,6 +101,24 @@ func Serve(o Opts) error {
 	}
 	srv.attest = ast
 
+	// Dial the build server lazily — Update will fall back to the
+	// in-VM apt-rebuild path if no builder is configured. Connection
+	// stays alive for the daemon's lifetime; gRPC handles reconnects.
+	if o.Builder != "" {
+		cc, err := grpc.NewClient(o.Builder,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithDefaultCallOptions(
+				grpc.MaxCallRecvMsgSize(64*1024*1024)))
+		if err != nil {
+			return fmt.Errorf("dial builder %s: %w", o.Builder, err)
+		}
+		srv.builderAddr = o.Builder
+		srv.builderClient = buildpb.NewPancakeBuilderClient(cc)
+		fmt.Fprintf(os.Stderr,
+			"[pancaked] build server: %s (auto-fetch missing layers on Update)\n",
+			o.Builder)
+	}
+
 	lis, err := net.Listen("tcp", o.Listen)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", o.Listen, err)
@@ -110,10 +135,12 @@ func Serve(o Opts) error {
 // server is the orchpb.PancakeServer implementation.
 type server struct {
 	orchpb.UnimplementedPancakeServer
-	k      *kit.Kit
-	pubkey string
-	token  string       // empty = no auth
-	attest *attestState // nil = no TPM, Attest RPC returns Unavailable
+	k             *kit.Kit
+	pubkey        string
+	token         string       // empty = no auth
+	attest        *attestState // nil = no TPM, Attest RPC returns Unavailable
+	builderAddr   string
+	builderClient buildpb.PancakeBuilderClient // nil = no auto-fetch
 }
 
 func (s *server) authInterceptor(ctx context.Context, req any,
@@ -211,36 +238,60 @@ func (s *server) Update(_ context.Context,
 		}
 	}
 	if len(missingSlugs) > 0 {
-		fmt.Fprintf(os.Stderr,
-			"[pancaked] %d missing layers; attempting local rebuild from apt\n",
-			len(missingSlugs))
-		expected, err := parseLowersRoothashes(m.Lowers)
-		if err != nil {
-			return &orchpb.UpdateResponse{
-					Error: "parse lowers: " + err.Error()},
-				status.Error(codes.InvalidArgument, err.Error())
+		// Preferred path: pull from the build server (content-addressed
+		// by roothash; bytes are canonical, no in-VM rebuild noise).
+		if s.builderClient != nil {
+			fmt.Fprintf(os.Stderr,
+				"[pancaked] %d missing layers; auto-fetching from build server %s\n",
+				len(missingSlugs), s.builderAddr)
+			if err := s.fetchLayersFromBuilder(missingLayers, m.Lowers); err != nil {
+				fmt.Fprintf(os.Stderr,
+					"[pancaked] build-server fetch failed: %v — will try apt rebuild\n", err)
+			}
+			missingSlugs = stillMissingSlugs(s.k, gm.Layer)
 		}
-		if err := buildMissingLayers(s.k, missingLayers, expected); err != nil {
+
+		// Fallback: in-VM rebuild from apt. Only kicks in when (a) no
+		// builder is configured, or (b) builder didn't have the layer.
+		// Subject to the well-known mkfs.ext4 reproducibility caveat.
+		if len(missingSlugs) > 0 {
+			fmt.Fprintf(os.Stderr,
+				"[pancaked] %d still missing; attempting local rebuild from apt\n",
+				len(missingSlugs))
+			expected, err := parseLowersRoothashes(m.Lowers)
+			if err != nil {
+				return &orchpb.UpdateResponse{
+						Error: "parse lowers: " + err.Error()},
+					status.Error(codes.InvalidArgument, err.Error())
+			}
+			// Re-derive the missingLayers slice for the still-missing slugs.
+			stillMissingRefs := []kit.LayerRef{}
+			for _, L := range gm.Layer {
+				slug := filepath.Base(filepath.Dir(L.Manifest))
+				for _, m := range missingSlugs {
+					if m == slug {
+						stillMissingRefs = append(stillMissingRefs, L)
+						break
+					}
+				}
+			}
+			if err := buildMissingLayers(s.k, stillMissingRefs, expected); err != nil {
+				return &orchpb.UpdateResponse{
+						MissingLayerSlugs: missingSlugs,
+						Error:             "auto-build: " + err.Error()},
+					status.Error(codes.FailedPrecondition, err.Error())
+			}
+			missingSlugs = stillMissingSlugs(s.k, gm.Layer)
+		}
+
+		if len(missingSlugs) > 0 {
 			return &orchpb.UpdateResponse{
 					MissingLayerSlugs: missingSlugs,
-					Error:             "auto-build: " + err.Error()},
-				status.Error(codes.FailedPrecondition, err.Error())
-		}
-		var stillMissing []string
-		for _, slug := range missingSlugs {
-			if _, err := os.Stat(filepath.Join(s.k.Repo(), slug, "image.img")); err != nil {
-				stillMissing = append(stillMissing, slug)
-			}
-		}
-		if len(stillMissing) > 0 {
-			return &orchpb.UpdateResponse{
-					MissingLayerSlugs: stillMissing,
-					Error:             "some layers still missing after rebuild"},
+					Error:             "layers still missing after fetch + rebuild"},
 				status.Error(codes.Internal, "still missing")
 		}
-		fmt.Fprintf(os.Stderr,
-			"[pancaked] all %d missing layers rebuilt locally with matching roothashes\n",
-			len(missingSlugs))
+		fmt.Fprintln(os.Stderr,
+			"[pancaked] all previously-missing layers now present")
 	}
 
 	// 4. Atomic install of the gen dir.
@@ -271,6 +322,20 @@ func (s *server) Update(_ context.Context,
 		"[pancaked] installed generation %d (counter %d, %d layers)\n",
 		newID, gm.Generation.Counter, len(gm.Layer))
 	return &orchpb.UpdateResponse{InstalledGeneration: int32(newID)}, nil
+}
+
+// stillMissingSlugs returns the subset of layer slugs whose
+// repo/<slug>/image.img doesn't exist on disk. Used after a fetch
+// or rebuild attempt to figure out which layers are still missing.
+func stillMissingSlugs(k *kit.Kit, layers []kit.LayerRef) []string {
+	var out []string
+	for _, L := range layers {
+		slug := filepath.Base(filepath.Dir(L.Manifest))
+		if _, err := os.Stat(filepath.Join(k.Repo(), slug, "image.img")); err != nil {
+			out = append(out, slug)
+		}
+	}
+	return out
 }
 
 // readManifestFromKit reads the three sidecar files for genID into a

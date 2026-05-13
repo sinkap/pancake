@@ -46,6 +46,12 @@ func main() {
 			"TPM PCR 7+11; mismatched boot chain → refuse to start. "+
 			"Pass an explicit path or use the implicit default by setting "+
 			"--tpm-token=auto. Mutually exclusive with --token-file.")
+	builder := flag.String("builder", "",
+		"address (host:port) of a pancake-build-server. When set, "+
+			"Update auto-fetches missing layers via GetLayer instead "+
+			"of failing with missing_layer_slugs[]. Falls back to the "+
+			"in-VM apt rebuild path if the build server doesn't have "+
+			"the layer. Empty disables auto-fetch.")
 	flag.Parse()
 
 	if *tpmToken == "auto" {
@@ -78,6 +84,7 @@ func main() {
 		PubKey:       *pubkey,
 		TokenFile:    *tokenFile,
 		TPMTokenFile: *tpmToken,
+		Builder:      *builder,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "pancaked: %v\n", err)
 		os.Exit(1)
