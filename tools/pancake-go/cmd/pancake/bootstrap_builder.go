@@ -195,8 +195,18 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 	addInternal("runtime", "", nil)  // server uses bundled binaries
 	addInternal("pancaked", "", nil) // server uses bundled binary
 	addInternal("pancake-host", "", hostBlobs)
-	if a.Orch.URL != "" {
-		addInternal("orch-config", a.Orch.URL, nil)
+	if a.Orch.hasURLs() {
+		packages = append(packages, &buildpb.Package{
+			Manager: &buildpb.Package_Internal{
+				Internal: &buildpb.PancakeInternal{
+					Recipe: "orch-config",
+					Params: map[string]string{
+						"ca-url":        a.Orch.CAURL,
+						"attest-ca-url": a.Orch.AttestCAURL,
+					},
+				},
+			},
+		})
 	}
 	if a.BzImagePath != "" {
 		addInternal("kernel", a.Kernel, kernelBlobs)
@@ -205,7 +215,7 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 
 	// 3. BuildImage.
 	internalCount := 4 // base + runtime + pancaked + pancake-host
-	if a.Orch.URL != "" {
+	if a.Orch.hasURLs() {
 		internalCount++
 	}
 	if a.BzImagePath != "" {

@@ -62,10 +62,10 @@ const (
 // TrustRoot anchors every TLS connection enroll makes (ACME +
 // attest-ca both go through the same gateway).
 type orchConfig struct {
-	URL          string `json:"url"`
 	CAURL        string `json:"ca_url"`
 	AttestCAURL  string `json:"attest_ca_url"`
 	TrustRoot    string `json:"trust_root"`
+	AttestCARoot string `json:"attest_ca_root"`
 	ClientCARoot string `json:"client_ca_root"`
 }
 
@@ -147,11 +147,11 @@ func cmdEnroll(_ *kit.Kit, args []string) int {
 			*attestCAURL = cfg.AttestCAURL
 		}
 		if *attestCARoot == "" {
-			*attestCARoot = cfg.TrustRoot
+			*attestCARoot = cfg.AttestCARoot
 		}
 		fmt.Fprintf(os.Stderr,
-			"[enroll] orch config loaded from %s (gateway=%s)\n",
-			*orchConfigPath, cfg.URL)
+			"[enroll] orch config loaded from %s (ca=%s attest=%s)\n",
+			*orchConfigPath, cfg.CAURL, cfg.AttestCAURL)
 	}
 
 	// (a) EK export — always runs.

@@ -428,9 +428,10 @@ type PancakeInternal struct {
 	Recipe string `protobuf:"bytes,1,opt,name=recipe,proto3" json:"recipe,omitempty"`
 	// Inputs. Which fields a given recipe consumes is determined by
 	// the recipe definition; unused fields must be empty.
-	Packages      []*APT            `protobuf:"bytes,2,rep,name=packages,proto3" json:"packages,omitempty"`                                                                     // recipes that take a pkg set
-	Blobs         map[string]string `protobuf:"bytes,3,rep,name=blobs,proto3" json:"blobs,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // role-name → sha256 (from UploadBlob)
-	Version       string            `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`                                                                       // recipes that take a version
+	Packages      []*APT            `protobuf:"bytes,2,rep,name=packages,proto3" json:"packages,omitempty"`                                                                       // recipes that take a pkg set
+	Blobs         map[string]string `protobuf:"bytes,3,rep,name=blobs,proto3" json:"blobs,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`   // role-name → sha256 (from UploadBlob)
+	Version       string            `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`                                                                         // recipes that take a version
+	Params        map[string]string `protobuf:"bytes,5,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // role-name → small string value
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -491,6 +492,13 @@ func (x *PancakeInternal) GetVersion() string {
 		return x.Version
 	}
 	return ""
+}
+
+func (x *PancakeInternal) GetParams() map[string]string {
+	if x != nil {
+		return x.Params
+	}
+	return nil
 }
 
 // LayerHandle is the server's response to a successful build/lookup.
@@ -1617,14 +1625,18 @@ const file_build_proto_rawDesc = "" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x14\n" +
 	"\x05suite\x18\x03 \x01(\tR\x05suite\x12\x12\n" +
 	"\x04arch\x18\x04 \x01(\tR\x04arch\x12\x16\n" +
-	"\x06mirror\x18\x05 \x01(\tR\x06mirror\"\xf4\x01\n" +
+	"\x06mirror\x18\x05 \x01(\tR\x06mirror\"\xf6\x02\n" +
 	"\x0fPancakeInternal\x12\x16\n" +
 	"\x06recipe\x18\x01 \x01(\tR\x06recipe\x121\n" +
 	"\bpackages\x18\x02 \x03(\v2\x15.pancake.build.v1.APTR\bpackages\x12B\n" +
 	"\x05blobs\x18\x03 \x03(\v2,.pancake.build.v1.PancakeInternal.BlobsEntryR\x05blobs\x12\x18\n" +
-	"\aversion\x18\x04 \x01(\tR\aversion\x1a8\n" +
+	"\aversion\x18\x04 \x01(\tR\aversion\x12E\n" +
+	"\x06params\x18\x05 \x03(\v2-.pancake.build.v1.PancakeInternal.ParamsEntryR\x06params\x1a8\n" +
 	"\n" +
 	"BlobsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +
+	"\vParamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xca\x02\n" +
 	"\vLayerHandle\x12\x1a\n" +
@@ -1752,7 +1764,7 @@ func file_build_proto_rawDescGZIP() []byte {
 }
 
 var file_build_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_build_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_build_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_build_proto_goTypes = []any{
 	(LayerPart)(0),                 // 0: pancake.build.v1.LayerPart
 	(BuildImageChunk_Artifact)(0),  // 1: pancake.build.v1.BuildImageChunk.Artifact
@@ -1775,43 +1787,45 @@ var file_build_proto_goTypes = []any{
 	(*Catalog)(nil),                // 18: pancake.build.v1.Catalog
 	(*Recipe)(nil),                 // 19: pancake.build.v1.Recipe
 	nil,                            // 20: pancake.build.v1.PancakeInternal.BlobsEntry
-	(*timestamppb.Timestamp)(nil),  // 21: google.protobuf.Timestamp
+	nil,                            // 21: pancake.build.v1.PancakeInternal.ParamsEntry
+	(*timestamppb.Timestamp)(nil),  // 22: google.protobuf.Timestamp
 }
 var file_build_proto_depIdxs = []int32{
 	3,  // 0: pancake.build.v1.Package.apt:type_name -> pancake.build.v1.APT
 	4,  // 1: pancake.build.v1.Package.internal:type_name -> pancake.build.v1.PancakeInternal
 	3,  // 2: pancake.build.v1.PancakeInternal.packages:type_name -> pancake.build.v1.APT
 	20, // 3: pancake.build.v1.PancakeInternal.blobs:type_name -> pancake.build.v1.PancakeInternal.BlobsEntry
-	21, // 4: pancake.build.v1.LayerHandle.built_at:type_name -> google.protobuf.Timestamp
-	2,  // 5: pancake.build.v1.BuildLayerRequest.package:type_name -> pancake.build.v1.Package
-	2,  // 6: pancake.build.v1.LookupLayerRequest.package:type_name -> pancake.build.v1.Package
-	2,  // 7: pancake.build.v1.BuildGenerationRequest.packages:type_name -> pancake.build.v1.Package
-	5,  // 8: pancake.build.v1.GenerationManifest.layer:type_name -> pancake.build.v1.LayerHandle
-	0,  // 9: pancake.build.v1.GetLayerRequest.want:type_name -> pancake.build.v1.LayerPart
-	0,  // 10: pancake.build.v1.LayerChunk.part:type_name -> pancake.build.v1.LayerPart
-	5,  // 11: pancake.build.v1.ListLayersResponse.layer:type_name -> pancake.build.v1.LayerHandle
-	2,  // 12: pancake.build.v1.BuildImageRequest.packages:type_name -> pancake.build.v1.Package
-	1,  // 13: pancake.build.v1.BuildImageChunk.artifact:type_name -> pancake.build.v1.BuildImageChunk.Artifact
-	19, // 14: pancake.build.v1.Catalog.recipe:type_name -> pancake.build.v1.Recipe
-	6,  // 15: pancake.build.v1.PancakeBuilder.BuildLayer:input_type -> pancake.build.v1.BuildLayerRequest
-	7,  // 16: pancake.build.v1.PancakeBuilder.LookupLayer:input_type -> pancake.build.v1.LookupLayerRequest
-	8,  // 17: pancake.build.v1.PancakeBuilder.BuildGeneration:input_type -> pancake.build.v1.BuildGenerationRequest
-	10, // 18: pancake.build.v1.PancakeBuilder.GetLayer:input_type -> pancake.build.v1.GetLayerRequest
-	14, // 19: pancake.build.v1.PancakeBuilder.UploadBlob:input_type -> pancake.build.v1.BlobChunk
-	12, // 20: pancake.build.v1.PancakeBuilder.ListLayers:input_type -> pancake.build.v1.ListLayersRequest
-	16, // 21: pancake.build.v1.PancakeBuilder.BuildImage:input_type -> pancake.build.v1.BuildImageRequest
-	5,  // 22: pancake.build.v1.PancakeBuilder.BuildLayer:output_type -> pancake.build.v1.LayerHandle
-	5,  // 23: pancake.build.v1.PancakeBuilder.LookupLayer:output_type -> pancake.build.v1.LayerHandle
-	9,  // 24: pancake.build.v1.PancakeBuilder.BuildGeneration:output_type -> pancake.build.v1.GenerationManifest
-	11, // 25: pancake.build.v1.PancakeBuilder.GetLayer:output_type -> pancake.build.v1.LayerChunk
-	15, // 26: pancake.build.v1.PancakeBuilder.UploadBlob:output_type -> pancake.build.v1.BlobReference
-	13, // 27: pancake.build.v1.PancakeBuilder.ListLayers:output_type -> pancake.build.v1.ListLayersResponse
-	17, // 28: pancake.build.v1.PancakeBuilder.BuildImage:output_type -> pancake.build.v1.BuildImageChunk
-	22, // [22:29] is the sub-list for method output_type
-	15, // [15:22] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	21, // 4: pancake.build.v1.PancakeInternal.params:type_name -> pancake.build.v1.PancakeInternal.ParamsEntry
+	22, // 5: pancake.build.v1.LayerHandle.built_at:type_name -> google.protobuf.Timestamp
+	2,  // 6: pancake.build.v1.BuildLayerRequest.package:type_name -> pancake.build.v1.Package
+	2,  // 7: pancake.build.v1.LookupLayerRequest.package:type_name -> pancake.build.v1.Package
+	2,  // 8: pancake.build.v1.BuildGenerationRequest.packages:type_name -> pancake.build.v1.Package
+	5,  // 9: pancake.build.v1.GenerationManifest.layer:type_name -> pancake.build.v1.LayerHandle
+	0,  // 10: pancake.build.v1.GetLayerRequest.want:type_name -> pancake.build.v1.LayerPart
+	0,  // 11: pancake.build.v1.LayerChunk.part:type_name -> pancake.build.v1.LayerPart
+	5,  // 12: pancake.build.v1.ListLayersResponse.layer:type_name -> pancake.build.v1.LayerHandle
+	2,  // 13: pancake.build.v1.BuildImageRequest.packages:type_name -> pancake.build.v1.Package
+	1,  // 14: pancake.build.v1.BuildImageChunk.artifact:type_name -> pancake.build.v1.BuildImageChunk.Artifact
+	19, // 15: pancake.build.v1.Catalog.recipe:type_name -> pancake.build.v1.Recipe
+	6,  // 16: pancake.build.v1.PancakeBuilder.BuildLayer:input_type -> pancake.build.v1.BuildLayerRequest
+	7,  // 17: pancake.build.v1.PancakeBuilder.LookupLayer:input_type -> pancake.build.v1.LookupLayerRequest
+	8,  // 18: pancake.build.v1.PancakeBuilder.BuildGeneration:input_type -> pancake.build.v1.BuildGenerationRequest
+	10, // 19: pancake.build.v1.PancakeBuilder.GetLayer:input_type -> pancake.build.v1.GetLayerRequest
+	14, // 20: pancake.build.v1.PancakeBuilder.UploadBlob:input_type -> pancake.build.v1.BlobChunk
+	12, // 21: pancake.build.v1.PancakeBuilder.ListLayers:input_type -> pancake.build.v1.ListLayersRequest
+	16, // 22: pancake.build.v1.PancakeBuilder.BuildImage:input_type -> pancake.build.v1.BuildImageRequest
+	5,  // 23: pancake.build.v1.PancakeBuilder.BuildLayer:output_type -> pancake.build.v1.LayerHandle
+	5,  // 24: pancake.build.v1.PancakeBuilder.LookupLayer:output_type -> pancake.build.v1.LayerHandle
+	9,  // 25: pancake.build.v1.PancakeBuilder.BuildGeneration:output_type -> pancake.build.v1.GenerationManifest
+	11, // 26: pancake.build.v1.PancakeBuilder.GetLayer:output_type -> pancake.build.v1.LayerChunk
+	15, // 27: pancake.build.v1.PancakeBuilder.UploadBlob:output_type -> pancake.build.v1.BlobReference
+	13, // 28: pancake.build.v1.PancakeBuilder.ListLayers:output_type -> pancake.build.v1.ListLayersResponse
+	17, // 29: pancake.build.v1.PancakeBuilder.BuildImage:output_type -> pancake.build.v1.BuildImageChunk
+	23, // [23:30] is the sub-list for method output_type
+	16, // [16:23] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_build_proto_init() }
@@ -1829,7 +1843,7 @@ func file_build_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_build_proto_rawDesc), len(file_build_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   19,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

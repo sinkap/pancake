@@ -217,6 +217,9 @@ message PancakeInternal {
   repeated APT packages       = 2;  // recipes that take a pkg set
   map<string, string> blobs   = 3;  // role-name → sha256 (from UploadBlob)
   string version              = 4;  // recipes that take a version
+  map<string, string> params  = 5;  // role-name → small string value
+                                    // (URLs, hostnames — anything that
+                                    // doesn't deserve to be a blob)
 }
 
 // ============================================================================

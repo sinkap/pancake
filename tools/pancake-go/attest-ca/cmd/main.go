@@ -60,6 +60,7 @@ func main() {
 	if err != nil {
 		die("server cert: %v", err)
 	}
+	publishTrustRoot(tlsCert, *caDir)
 
 	httpSrv := &http.Server{
 		Addr:    *listen,
@@ -130,6 +131,34 @@ func loadOrSelfSignServerCert(certFile, keyFile, caDir string) (tls.Certificate,
 		return tls.Certificate{}, err
 	}
 	return tls.LoadX509KeyPair(cp, kp)
+}
+
+// publishTrustRoot writes the TLS server cert (in PEM form) to
+// /pancake-trust/attest-ca-root.crt when that directory exists,
+// so pancake-build-server (mounting the same docker volume RO)
+// can bake it into orch-config layers without HTTP fetch / blob
+// upload from the operator. No-op when the volume is not mounted.
+func publishTrustRoot(_ tls.Certificate, caDir string) {
+	const dst = "/pancake-trust/attest-ca-root.crt"
+	if _, err := os.Stat("/pancake-trust"); err != nil {
+		return
+	}
+	src := filepath.Join(caDir, "server.crt")
+	b, err := os.ReadFile(src)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"[pancake-attest-ca] publishTrustRoot: read %s: %v\n",
+			src, err)
+		return
+	}
+	if err := os.WriteFile(dst, b, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"[pancake-attest-ca] publishTrustRoot: write %s: %v\n",
+			dst, err)
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"[pancake-attest-ca] published %s\n", dst)
 }
 
 func die(format string, args ...any) {

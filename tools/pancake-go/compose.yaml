@@ -59,6 +59,12 @@ services:
       - "8444:8444"
     volumes:
       - pancake-attest-ca-state:/home/attestca
+      # Publishes /pancake-trust/attest-ca-root.crt on first boot
+      # so pancake-build-server picks it up without HTTP fetch.
+      - pancake-trust:/pancake-trust
+    depends_on:
+      pancake-trust-init:
+        condition: service_completed_successfully
 
   pancake-build-server:
     build:

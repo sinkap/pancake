@@ -145,7 +145,10 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			sshHostKeys, sshAuthKeys,
 			image, initramfsPath, kernel, bzimage, bzimageOut,
 			efiOut, cmdline, builder)
-		orch = OrchArgs{URL: r.Orchestrator.URL}
+		orch = OrchArgs{
+			CAURL:       r.Orchestrator.CAURL,
+			AttestCAURL: r.Orchestrator.AttestCAURL,
+		}
 	}
 
 	// Sentinel kernel versions: "tree" / "local" mean "read it out of
@@ -344,17 +347,19 @@ type bootstrapArgs struct {
 	Orch OrchArgs
 }
 
-// OrchArgs mirrors recipe.Orchestrator. The single URL is the
-// gateway endpoint; the build server handles trust material via
-// its own local trust volume (recipe carries no PEMs).
+// OrchArgs mirrors recipe.Orchestrator. Two URLs reflect the two
+// independent services (step-ca's ACME endpoint + pancake-attest-ca);
+// trust material is a build-server concern (it reads PEMs from its
+// own trust volume), not in the recipe.
 type OrchArgs struct {
-	URL string
+	CAURL       string
+	AttestCAURL string
 }
 
-// hasURL reports whether the orchestrator URL was provided in the
-// recipe. When false, the orch-config layer is not built.
-func (o OrchArgs) hasURL() bool {
-	return o.URL != ""
+// hasURLs reports whether both orchestrator URLs were provided in
+// the recipe. When false, the orch-config layer is not built.
+func (o OrchArgs) hasURLs() bool {
+	return o.CAURL != "" && o.AttestCAURL != ""
 }
 
 

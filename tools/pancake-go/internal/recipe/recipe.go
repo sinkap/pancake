@@ -83,7 +83,17 @@ type Recipe struct {
 // at /etc/pancake/orch/ inside the running VM. Empty URL = no
 // orch-config layer is built.
 type Orchestrator struct {
-	URL string `yaml:"url"`
+	// CAURL is the step-ca ACME endpoint the VM hits to enroll its
+	// TLS cert (e.g. https://10.0.2.2:8443/acme/tpm/directory).
+	CAURL string `yaml:"ca-url"`
+	// AttestCAURL is the pancake-attest-ca base URL the VM hits to
+	// enroll its AK before the ACME order (e.g.
+	// https://10.0.2.2:8444). Both must be reachable from inside
+	// the VM at boot time.
+	//
+	// For QEMU/usernet that's typically https://10.0.2.2:<port>
+	// and the host forwards the docker-published ports.
+	AttestCAURL string `yaml:"attest-ca-url"`
 }
 
 type Distro struct {
