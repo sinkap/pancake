@@ -18,6 +18,17 @@
 # State persists in named volumes; `docker compose down -v` wipes it.
 
 services:
+  # Tiny init: docker volumes default to root:root mode 0755 which
+  # blocks the unprivileged step / attestca users from writing.
+  # Chmod world-writable on first start so init.sh can publish the
+  # root cert.
+  pancake-trust-init:
+    image: busybox
+    command: ["chmod", "0777", "/pancake-trust"]
+    volumes:
+      - pancake-trust:/pancake-trust
+    restart: "no"
+
   pancake-ca-server:
     build:
       context: ./ca-server
@@ -34,6 +45,9 @@ services:
       # build server can pick it up without HTTP fetch / operator
       # extraction. See ca-server/init.sh.
       - pancake-trust:/pancake-trust
+    depends_on:
+      pancake-trust-init:
+        condition: service_completed_successfully
 
   pancake-attest-ca:
     build:
@@ -68,6 +82,11 @@ services:
       # Read-only mount of the shared trust volume so bakeOrchConfig
       # can read trust-root.crt without HTTP fetch / blob upload.
       - pancake-trust:/var/lib/pancake-build-server/trust:ro
+      # Bind /dev so losetup -f sees the host's loop devices for
+      # efi.PackEFIDisk's GPT + ESP partitioning. --privileged alone
+      # snapshots /dev at start time but doesn't share new loop
+      # allocations made on the host afterwards.
+      - /dev:/dev
     command:
       - "-listen=:7879"
       - "-cache=/var/lib/pancake-build-server"

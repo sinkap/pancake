@@ -67,6 +67,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sudo \
         openssh-client \
         tar \
+        kmod \
+        cpio \
+        gzip \
+        systemd-ukify \
+        sbsigntool \
+        binutils \
+        gdisk \
+        dosfstools \
+        mtools \
+        systemd-boot-efi \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/pancake-build-server /usr/local/bin/pancake-build-server

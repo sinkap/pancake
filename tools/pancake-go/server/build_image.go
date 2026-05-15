@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/deb"
@@ -129,10 +130,22 @@ func (s *Server) AssembleImage(
 	// 4. Initramfs — server-bundled init script + mount-overlay
 	// binary, modules from the unpacked pancake-modules layer (when
 	// the recipe shipped one) or the host's /lib/modules fallback.
+	// Find kernel + modules first so we know the actual KVer
+	// before any artifact assembly. KVer for the apt path may
+	// differ from req.KernelUname (server takes whatever apt
+	// installed); custom-kernel path uses req.KernelUname.
+	var bzimagePath, kver string
+	if req.WantInitramfs || req.WantUKI || req.WantEFIDisk || req.WantBzImage {
+		bzimagePath, kver, err = s.findKernel(gm, req.KernelUname)
+		if err != nil {
+			return nil, fmt.Errorf("find kernel: %w", err)
+		}
+	}
+
 	var initramfsPath string
 	if req.WantInitramfs || req.WantUKI || req.WantEFIDisk {
 		initramfsPath = filepath.Join(work, "pancake-initramfs.cpio.gz")
-		modulesDir := s.unpackedModulesDirIfPresent(gm, req.KernelUname)
+		modulesDir := s.findModulesDir(gm, kver)
 		var pubBytes []byte
 		if s.signer != nil {
 			cert, err := s.signer.Cert(ctx)
@@ -150,7 +163,7 @@ func (s *Server) AssembleImage(
 		}
 		if err := initramfs.Build(initramfs.Opts{
 			OutPath:         initramfsPath,
-			KVer:            req.KernelUname,
+			KVer:            kver,
 			ModulesDir:      modulesDir,
 			InitSrcPath:     filepath.Join(s.bundledBinsDir, "init"),
 			MountOverlayBin: filepath.Join(s.bundledBinsDir, "mount-overlay"),
@@ -166,20 +179,12 @@ func (s *Server) AssembleImage(
 		}
 	}
 
-	// 5. Bzimage copy (used by QEMU's -kernel arg). Sourced from
-	// the unpacked pancake-kernel layer when present; otherwise
-	// from the suite's linux-image-* package's /boot.
-	var bzimagePath string
-	if req.WantBzImage || req.WantUKI || req.WantEFIDisk {
-		bzimagePath, err = s.findKernelBzImage(gm)
+	// 5. Bzimage copy (used by QEMU's -kernel arg). bzimagePath
+	// was already resolved by findKernel above.
+	if req.WantBzImage {
+		out.BzImage, err = os.ReadFile(bzimagePath)
 		if err != nil {
-			return nil, fmt.Errorf("find bzImage: %w", err)
-		}
-		if req.WantBzImage {
-			out.BzImage, err = os.ReadFile(bzimagePath)
-			if err != nil {
-				return nil, err
-			}
+			return nil, err
 		}
 	}
 
@@ -192,7 +197,7 @@ func (s *Server) AssembleImage(
 			Initrd:  initramfsPath,
 			Cmdline: req.Cmdline,
 			Out:     ukiPath,
-			UName:   req.KernelUname,
+			UName:   kver,
 			Signer:  s.signer,
 		}); err != nil {
 			return nil, fmt.Errorf("efi.BuildUKI: %w", err)
@@ -288,58 +293,87 @@ func (s *Server) materializeKit(
 	return nil
 }
 
-// unpackedModulesDirIfPresent returns the layer-staging cache dir
-// for the pancake-modules layer that matches kver, when present.
-// initramfs.Build reads <return>/lib/modules/<kver>/ from there
-// without having to loop-mount the verity image.
+// findKernel returns (path-to-bzImage, kernel-version) for the
+// generation. Search order:
 //
-// Returns "" when no matching modules layer is in the generation
-// (initramfs.Build then falls back to /lib/modules on the host).
-func (s *Server) unpackedModulesDirIfPresent(
-	gm *buildpb.GenerationManifest, kver string,
-) string {
-	for _, h := range gm.Layer {
-		if h.Name != "pancake-modules" {
-			continue
-		}
-		// Match the version (kver) — multiple module layers
-		// could in principle coexist, only the one matching the
-		// kernel we're building applies.
-		if h.Version != kver {
-			continue
-		}
-		st := s.layerStagingDir(h.Roothash)
-		if _, err := os.Stat(st); err == nil {
-			return st
-		}
-	}
-	return ""
-}
-
-// findKernelBzImage returns the path to /boot/vmlinuz inside the
-// staging cache of the pancake-kernel layer in this generation.
-// Falls through to scanning a linux-image-* layer's /boot when no
-// custom kernel was uploaded.
-func (s *Server) findKernelBzImage(
-	gm *buildpb.GenerationManifest,
-) (string, error) {
+//  1. pancake-kernel layer — operator-uploaded custom bzImage.
+//     Caller-provided kver (in.KernelUname) is authoritative.
+//  2. linux-image-* APT layer — scan its staging cache for
+//     /boot/vmlinuz-<X>; return that vmlinuz + the discovered X
+//     as the kernel version.
+//
+// Returns an error when neither is found. The kver discovered in
+// case (2) overrides in.KernelUname so the rest of the pipeline
+// uses the kernel apt actually installed.
+func (s *Server) findKernel(
+	gm *buildpb.GenerationManifest, requestedKver string,
+) (path, kver string, err error) {
+	// (1) custom kernel layer wins
 	for _, h := range gm.Layer {
 		if h.Name == "pancake-kernel" {
-			p := filepath.Join(s.layerStagingDir(h.Roothash), "boot", "vmlinuz")
-			if _, err := os.Stat(p); err == nil {
-				return p, nil
+			p := filepath.Join(s.layerStagingDir(h.Roothash),
+				"boot", "vmlinuz")
+			if _, e := os.Stat(p); e == nil {
+				return p, requestedKver, nil
 			}
 		}
 	}
-	// Fall back to a linux-image-* layer's /boot/vmlinuz-*. Those
-	// layers are baked via bakeLayer (APT path) which doesn't
-	// preserve staging — return an actionable error explaining how
-	// to enable the staged path.
-	return "", fmt.Errorf("findKernelBzImage: no pancake-kernel " +
-		"layer with cached staging in this generation. Either " +
-		"upload a custom kernel via the kernel recipe (operator " +
-		"side) or extend the APT bakeLayer path to optionally " +
-		"preserve staging (server side, future work)")
+	// (2) apt linux-image-*'s /boot/vmlinuz-<ver>
+	for _, h := range gm.Layer {
+		if !strings.HasPrefix(h.Name, "linux-image-") {
+			continue
+		}
+		st := s.layerStagingDir(h.Roothash)
+		bootDir := filepath.Join(st, "boot")
+		ents, e := os.ReadDir(bootDir)
+		if e != nil {
+			continue
+		}
+		for _, ent := range ents {
+			if !strings.HasPrefix(ent.Name(), "vmlinuz-") {
+				continue
+			}
+			ver := strings.TrimPrefix(ent.Name(), "vmlinuz-")
+			return filepath.Join(bootDir, ent.Name()), ver, nil
+		}
+	}
+	return "", "", fmt.Errorf("findKernel: no pancake-kernel layer " +
+		"with cached staging and no linux-image-* layer with " +
+		"/boot/vmlinuz-* in its staging cache")
+}
+
+// findModulesDir returns the layer-staging dir whose
+// /lib/modules/<kver>/ subtree exists. Search order matches
+// findKernel: pancake-modules layer first, then linux-modules-*
+// layer. Returns "" when not found (initramfs.Build then falls
+// back to host /lib/modules — useful only when host kernel
+// matches kver, which it usually doesn't).
+func (s *Server) findModulesDir(
+	gm *buildpb.GenerationManifest, kver string,
+) string {
+	check := func(roothash string) string {
+		st := s.layerStagingDir(roothash)
+		if _, err := os.Stat(filepath.Join(st, "lib/modules", kver)); err == nil {
+			return st
+		}
+		return ""
+	}
+	for _, h := range gm.Layer {
+		if h.Name == "pancake-modules" && h.Version == kver {
+			if d := check(h.Roothash); d != "" {
+				return d
+			}
+		}
+	}
+	for _, h := range gm.Layer {
+		if strings.HasPrefix(h.Name, "linux-modules-") ||
+			strings.HasPrefix(h.Name, "linux-image-") {
+			if d := check(h.Roothash); d != "" {
+				return d
+			}
+		}
+	}
+	return ""
 }
 
 // pubkeyFromCertBytes parses a PEM cert and returns its

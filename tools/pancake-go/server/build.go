@@ -266,6 +266,25 @@ func (s *Server) bakeLayer(
 		}
 	}
 
+	// Preserve staging too — AssembleImage reads /boot/vmlinuz and
+	// /lib/modules/<KVer> out of the staged trees of linux-image-*
+	// and linux-modules-* layers so it can build the initramfs and
+	// bundle the kernel without loop-mounting verity images.
+	stagingFinal := s.layerStagingDir(roothash)
+	if _, err := os.Stat(stagingFinal); err == nil {
+		os.RemoveAll(staging)
+	} else {
+		if err := os.MkdirAll(filepath.Dir(stagingFinal), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.Rename(staging, stagingFinal); err != nil {
+			fmt.Fprintf(os.Stderr,
+				"[bake] warn: could not cache staging for %s (%v); "+
+					"kernel/modules sourcing for layers will fall back\n",
+				name, err)
+		}
+	}
+
 	mf, err := os.ReadFile(filepath.Join(final, "manifest.toml"))
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
