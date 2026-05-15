@@ -68,7 +68,7 @@ OVMF_VARS="$WORK/OVMF_VARS.fd"
 VM_CONSOLE="$WORK/vm.console"
 VM_PID="$WORK/vm.pid"
 EK_PUB="$WORK/ek.pub"
-RECIPE="$WORK/recipe.toml"
+RECIPE="$WORK/recipe.yaml"
 CONTAINER=pancake-build-server-demo
 CACHE_VOL=pancake-build-cache-demo
 
@@ -188,12 +188,12 @@ say "mint orchestrator client-CA (signs the cert pancake orchestrate presents)"
     --out-cert "$CLIENT_CERT" --out-key "$CLIENT_KEY" 2>&1 | sed 's/^/  /'
 
 # ---------- recipe + bootstrap -------------------------------------
-# Recipe lives in demo/recipe.toml.template with ${VAR} placeholders;
+# Recipe lives in demo/recipe.yaml.template with ${VAR} placeholders;
 # envsubst materializes it at $RECIPE with the current shell env.
-say "write recipe → $RECIPE (from recipe.toml.template)"
+say "write recipe → $RECIPE (from recipe.yaml.template)"
 export KIT BZIMAGE INITRAMFS BZ_OUT EFI_IMG KEY CERT REPO AUTH_KEY \
        WORK CA_DIR CA_PORT AHKCID_PORT
-envsubst < "$REPO/demo/recipe.toml.template" > "$RECIPE"
+envsubst < "$REPO/demo/recipe.yaml.template" > "$RECIPE"
 
 say "bootstrap kit via build server (this runs mmdebstrap server-side, ~3 min cold)"
 sudo "$PANCAKE" bootstrap --builder=localhost:"$GRPC_PORT" "$RECIPE" \

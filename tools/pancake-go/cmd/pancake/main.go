@@ -26,7 +26,7 @@ inspect:
   show <pkg>          dump a package manifest
 
 modify (host):
-  bootstrap           mmdebstrap → kit + (optionally) disk image + initramfs
+  bootstrap           dial pancake-build-server → kit + disk image + initramfs
   build               turn one .deb into one verity layer + manifest
 
 modify (in-VM only — operate on the running pancake-os):

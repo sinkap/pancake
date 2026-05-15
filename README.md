@@ -158,41 +158,45 @@ up-check.
 
 ### 1. Build a kit + disk image + initramfs in one command
 
-The clean way is a TOML recipe — one file instead of 21 flags. Save as
-`./pancake-recipe.toml` and `sudo pancake bootstrap` picks it up
+The clean way is a YAML recipe — one file instead of 21 flags. Save as
+`./pancake-recipe.yaml` and `sudo pancake bootstrap` picks it up
 automatically; otherwise pass the path positionally.
 
-```toml
-# ./pancake-recipe.toml
-output   = "/var/tmp/pancake-kit"
-hostname = "pancake"
-packages = ["openssh-server", "chrony", "nano"]
+```yaml
+# ./pancake-recipe.yaml
+output: /var/tmp/pancake-kit
+hostname: pancake
+builder: localhost:7879
+packages:
+  - openssh-server
+  - chrony
+  - nano
 
-[distro]
-suite = "noble"
+distro:
+  suite: noble
 
-[ssh]
-authorized-keys = "~/.ssh/authorized_keys"
+ssh:
+  authorized-keys: ~/.ssh/authorized_keys
 
-[kernel]
-version = "tree"   # read it out of bzimage; or pin "7.0.0-g..." literally
-bzimage = "~/projects/linux-bpf-for-next/arch/x86/boot/bzImage"
+kernel:
+  version: tree   # read it out of bzimage; or pin "7.0.0-g..." literally
+  bzimage: ~/projects/linux-bpf-for-next/arch/x86/boot/bzImage
 
-[outputs]
-image     = "/var/tmp/pancake-state.img"
-initramfs = "/var/tmp/pancake-initramfs.cpio.gz"
-bzimage   = "/var/tmp/pancake-bzImage"
+outputs:
+  image: /var/tmp/pancake-state.img
+  initramfs: /var/tmp/pancake-initramfs.cpio.gz
+  bzimage: /var/tmp/pancake-bzImage
 ```
 
 ```sh
-sudo tools/pancake-go/bin/pancake bootstrap          # uses ./pancake-recipe.toml
-sudo tools/pancake-go/bin/pancake bootstrap path/to/other.toml
-sudo tools/pancake-go/bin/pancake bootstrap recipe.toml --hostname=other
+sudo tools/pancake-go/bin/pancake bootstrap          # uses ./pancake-recipe.yaml
+sudo tools/pancake-go/bin/pancake bootstrap path/to/other.yaml
+sudo tools/pancake-go/bin/pancake bootstrap recipe.yaml --hostname=other
                                                      # CLI flag wins over recipe
 ```
 
 CLI flag > recipe value > built-in default. `~` expands to the invoking
-user's home (honors `SUDO_USER`, not `/root`). Unknown TOML keys cause
+user's home (honors `SUDO_USER`, not `/root`). Unknown YAML keys cause
 a parse error so typos are caught up front. The full schema is the
 package doc on `internal/recipe`.
 
@@ -238,7 +242,7 @@ identity + build-host-specific bytes); everything else streams in via
 ```sh
 sudo tools/pancake-go/bin/pancake bootstrap \
     --builder=localhost:7879 \
-    pancake-recipe.toml
+    pancake-recipe.yaml
 ```
 
 A fresh build is dominated by the server's mmdebstrap (~2-3 minutes for

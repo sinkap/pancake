@@ -1,46 +1,36 @@
-// `pancake bootstrap`: build a complete pancake-os kit from a Debian
-// package list, optionally also packing the disk image and building the
-// initramfs in one go.
+// `pancake bootstrap`: dial a pancake-build-server, hand it the
+// recipe + uploaded blobs, receive the assembled artifacts.
 //
-// Process:
+// All build steps (mmdebstrap, per-package layer extraction,
+// pancake-host / pancake-runtime / pancaked / kernel / modules /
+// orch-config layer assembly, disk pack, initramfs build, UKI
+// signing, EFI disk pack) live server-side now. The CLI is a thin
+// orchestrator: parse recipe → upload blobs → call the server →
+// stream artifacts back.
 //
-//  1. mmdebstrap → _sandbox/ with all packages installed.
-//  2. Customize sandbox: hostname, ssh host keys, authorized_keys, debug +
-//     networkd units, sshd_config; bake the pancake binary (this same
-//     executable) + the C helpers (mount-overlay, pivot-root) + the
-//     systemd remount unit.
-//  3. For each installed package: stage files → mkfs.ext4 + verity format
-//     → manifest.
-//  4. Orphans (postinst side effects not owned by any package) →
-//     pancake-state layer.
-//  5. Topo-sort by Depends, write generations/1/{manifest.toml,lowers},
-//     point current → generations/1.
-//  6. With --image PATH: pack the kit into one ext4 disk image at PATH.
-//  7. With --initramfs PATH: build the manifest-driven initramfs against
-//     /lib/modules/<--kver> and write to PATH.
+// "I want to build offline" → run the server locally via the
+// compose stack (tools/pancake-go/compose.yaml).
 //
-// Pure file ops + mmdebstrap + mkfs/cpio. No live overlay-of-N-layers
-// stress on the host kernel. Safe to run on the build machine.
+// Today the server-side endpoint that does the full assembly is
+// reachable as Server.AssembleImage; the BuildImage gRPC RPC that
+// wraps it lands once `protoc` regenerates internal/buildpb (see
+// tools/pancake-go/HACKING.md). Until that regen, the client still
+// post-processes layers locally — the pack* helpers in this file
+// stay around to support that interim.
 package main
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/deb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/efi"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/initramfs"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/layer"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/pack"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/recipe"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
@@ -83,7 +73,8 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		"http://archive.ubuntu.com/ubuntu/", "apt mirror URL")
 	pkgs := fs.String("packages", "",
 		"comma-separated extra packages on top of the system baseline")
-	out := fs.String("output", "", "kit output directory (required)")
+	out := fs.String("output", ".", "kit output directory")
+	fs.StringVar(out, "o", ".", "shorthand for --output")
 	hostname := fs.String("hostname", "pancake", "/etc/hostname")
 	keepSandbox := fs.Bool("keep-sandbox", false,
 		"don't delete _sandbox after building")
@@ -136,13 +127,13 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			"includes /usr/sbin/pancaked + the systemd unit so the daemon "+
 			"auto-starts at boot.")
 	builder := fs.String("builder", "",
-		"address of a pancake-build-server to delegate per-package + base layer "+
-			"building to (e.g. localhost:7879). Empty = build everything "+
-			"locally as today. v1: pancake-host + pancake-kernel/modules "+
-			"still build client-side regardless of this flag.")
+		"address of a pancake-build-server (e.g. localhost:7879). "+
+			"Required — overrides `builder:` in the recipe. The local "+
+			"build path is gone; \"build offline\" means run the build "+
+			"server locally via the compose stack.")
 
-	// One optional positional: a recipe TOML path. If absent, look for
-	// ./pancake-recipe.toml; if THAT's absent, fall back to flag-only.
+	// One optional positional: a recipe YAML path. If absent, look for
+	// ./pancake-recipe.yaml; if THAT's absent, fall back to flag-only.
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -160,6 +151,12 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 	// set by the user (NOT defaulted), so we know whose values to keep.
 	flagSet := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { flagSet[f.Name] = true })
+	// `-o` is a shorthand for `--output`; collapse so the recipe-
+	// precedence check doesn't think the user "didn't set" output
+	// when they actually passed `-o`.
+	if flagSet["o"] {
+		flagSet["output"] = true
+	}
 
 	var orch OrchArgs
 	if recipePath != "" {
@@ -171,7 +168,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			suite, mirror, pkgs, out, hostname, keepSandbox,
 			sshHostKeys, sshAuthKeys, pancakeBin, pancakedBin, srcRoot,
 			image, initramfsPath, kernel, bzimage, bzimageOut,
-			efiOut, cmdline, signKey, signCert)
+			efiOut, cmdline, signKey, signCert, builder)
 		orch = OrchArgs{
 			StepCARoot:   r.Orchestrator.StepCARoot,
 			AhkcidRoot:   r.Orchestrator.AhkcidRoot,
@@ -198,21 +195,28 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		*kernel = v
 	}
 
-	if *out == "" || *pkgs == "" {
+	if *pkgs == "" {
 		fmt.Fprintln(os.Stderr,
 			"usage:\n"+
-				"  pancake bootstrap [recipe.toml] [--flag=value ...]\n"+
-				"  pancake bootstrap --packages a,b,c --output DIR [other flags]\n"+
+				"  pancake bootstrap [recipe.yaml] [--flag=value ...]\n"+
+				"  pancake bootstrap --packages a,b,c [-o DIR] [other flags]\n"+
 				"\n"+
-				"recipe is auto-loaded from ./pancake-recipe.toml if present.")
+				"recipe is auto-loaded from ./pancake-recipe.yaml if present.\n"+
+				"output defaults to the current directory; override with -o / --output.")
 		return 2
+	}
+	if *builder == "" {
+		return die(fmt.Errorf(
+			"--builder is required (or set `builder:` in the recipe). " +
+				"To build offline, run the build server locally — see " +
+				"tools/pancake-go/compose.yaml."))
 	}
 
 	fmt.Fprintf(os.Stderr,
 		"[bootstrap] resolved: output=%s hostname=%s suite=%s kernel=%s\n",
 		*out, *hostname, *suite, *kernel)
 
-	if err := bootstrap(bootstrapArgs{
+	if err := bootstrapViaBuilder(bootstrapArgs{
 		Suite:           *suite,
 		Mirror:          *mirror,
 		Packages:        splitCSV(*pkgs),
@@ -252,7 +256,7 @@ func applyRecipeDefaults(r *recipe.Recipe, flagSet map[string]bool,
 	suite, mirror, pkgs, out, hostname *string, keepSandbox *bool,
 	sshHostKeys, sshAuthKeys, pancakeBin, pancakedBin, srcRoot *string,
 	image, initramfsPath, kernel, bzimage, bzimageOut, efiOut,
-	cmdline, signKey, signCert *string) {
+	cmdline, signKey, signCert, builder *string) {
 	set := func(name, recipeVal string, dst *string) {
 		if !flagSet[name] && recipeVal != "" {
 			*dst = recipeVal
@@ -267,6 +271,7 @@ func applyRecipeDefaults(r *recipe.Recipe, flagSet map[string]bool,
 	// Top-level
 	set("output", r.Output, out)
 	set("hostname", r.Hostname, hostname)
+	set("builder", r.Builder, builder)
 	if !flagSet["packages"] && len(r.Packages) > 0 {
 		*pkgs = strings.Join(r.Packages, ",")
 	}
@@ -404,9 +409,10 @@ type bootstrapArgs struct {
 }
 
 // OrchArgs mirrors recipe.Orchestrator. Pulled out into its own
-// struct so cmd/pancake/bootstrap.go can pass it down to
-// packOrchConfigLayer without dragging recipe imports through every
-// helper.
+// struct so the bootstrap helpers can pass it around without
+// dragging the recipe package through every signature. Server-side
+// the orch-config layer is built by bakeOrchConfig in the build
+// server's recipes.go; the client uploads these as blobs.
 type OrchArgs struct {
 	StepCARoot   string
 	AhkcidRoot   string
@@ -423,444 +429,9 @@ func (o OrchArgs) hasAll() bool {
 		o.ClientCARoot != "" && o.CAURL != "" && o.AttestCAURL != ""
 }
 
-func bootstrap(a bootstrapArgs) error {
-	if a.BuilderAddr != "" {
-		return bootstrapViaBuilder(a)
-	}
-	if err := os.MkdirAll(a.Output, 0o755); err != nil {
-		return err
-	}
-	repo := filepath.Join(a.Output, "repo")
-	gen1 := filepath.Join(a.Output, "generations", "1")
-	sandboxDir := filepath.Join(a.Output, "_sandbox")
-	for _, d := range []string{repo, gen1} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return err
-		}
-	}
 
-	pkgList := dedup(append(append([]string{}, SystemBaseline...), a.Packages...))
-	if a.BzImagePath == "" {
-		// No custom bzImage → pull the suite's default kernel meta-package.
-		// On Debian/Ubuntu this in turn pulls linux-image-X.Y.Z and
-		// linux-modules-X.Y.Z as separate .debs, so they end up as two
-		// natural pancake layers via the per-package staging below.
-		pkgList = append(pkgList, "linux-image-generic")
-	}
 
-	fmt.Fprintf(os.Stderr, "\n[bootstrap] mmdebstrap → %s\n", sandboxDir)
-	if err := mmdebstrap(a.Suite, a.Mirror, pkgList, sandboxDir); err != nil {
-		return err
-	}
 
-	if err := customizeSandbox(sandboxDir, a); err != nil {
-		return err
-	}
-
-	pkgs, err := deb.InstalledPackages(sandboxDir)
-	if err != nil {
-		return err
-	}
-	pkgs = deb.SortPackages(pkgs)
-	fmt.Fprintf(os.Stderr, "\n[bootstrap] %d packages installed in sandbox\n",
-		len(pkgs))
-
-	tmp, err := os.MkdirTemp("", "pancake-stage-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmp)
-
-	var layers []laidOut
-	ownedPaths := map[string]bool{}
-
-	for _, p := range pkgs {
-		fmt.Fprintf(os.Stderr, "\n[bootstrap] %s %s\n", p.Name, p.Version)
-		files, err := deb.PackageFiles(sandboxDir, p.Name)
-		if err != nil {
-			return err
-		}
-		// Per-host paths (hostname, ssh keys) are carved into the
-		// pancake-host layer; if any package "owns" them (e.g.
-		// base-files ships /etc/hostname) we drop them from BOTH
-		// ownership tracking and staging so the package's roothash
-		// stays the same across the fleet.
-		kept := files[:0]
-		for _, f := range files {
-			if isPerHostPath(f) {
-				continue
-			}
-			ownedPaths[f] = true
-			kept = append(kept, f)
-		}
-		files = kept
-		staging := filepath.Join(tmp, p.Name)
-		if err := deb.StageFiles(sandboxDir, files, staging); err != nil {
-			return err
-		}
-		slug := deb.SlugifyVersion(p.Version)
-		dirName := fmt.Sprintf("%s-%s", p.Name, slug)
-		pkgDir := filepath.Join(repo, dirName)
-		if _, err := os.Stat(pkgDir); err == nil {
-			_ = runner.Run(runner.Cmd{
-				Argv: []string{"rm", "-rf", pkgDir}, Sudo: true,
-			})
-		}
-		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
-			return err
-		}
-		roothash, dataSize, err := layer.MakeVerity(staging,
-			filepath.Join(pkgDir, "image.img"),
-			"pk-"+truncateStr(p.Name, 12), 0, dirName)
-		if err != nil {
-			return err
-		}
-		descRaw, _ := deb.PackageField(sandboxDir, p.Name, "Description")
-		depsRaw, _ := deb.PackageField(sandboxDir, p.Name, "Depends")
-		if err := kit.WritePackageManifest(pkgDir, kit.PackageManifest{
-			Package: kit.PackageBlock{
-				Name: p.Name, Version: p.Version, Arch: p.Arch,
-				Description: firstLine(descRaw),
-			},
-			Image:   kit.ImageBlock{DataSize: dataSize, Roothash: roothash},
-			Depends: kit.DependsBlock{Runtime: deb.ParseDepends(depsRaw)},
-		}); err != nil {
-			return err
-		}
-		layers = append(layers, laidOut{p.Name, p.Version, p.Arch, dirName})
-	}
-
-	// Orphans → pancake-state.
-	fmt.Fprintln(os.Stderr,
-		"\n[bootstrap] computing orphan (postinst-created) files")
-	every, err := deb.AllRealFiles(sandboxDir)
-	if err != nil {
-		return err
-	}
-	var orphans []string
-	for f := range every {
-		if ownedPaths[f] {
-			continue
-		}
-		if shouldIgnore(f) {
-			continue
-		}
-		if isPerHostPath(f) {
-			// Goes into pancake-host instead. Common case:
-			// /etc/ssh/ssh_host_*_key generated by openssh-server's
-			// postinst — we replace them with our own.
-			continue
-		}
-		orphans = append(orphans, f)
-	}
-	sort.Strings(orphans)
-	fmt.Fprintf(os.Stderr, "  → %d orphan files (kept)\n", len(orphans))
-
-	if len(orphans) > 0 {
-		staging := filepath.Join(tmp, "_pancake-state")
-		if err := deb.StageFiles(sandboxDir, orphans, staging); err != nil {
-			return err
-		}
-		pkgDir := filepath.Join(repo, "pancake-state")
-		if _, err := os.Stat(pkgDir); err == nil {
-			_ = runner.Run(runner.Cmd{
-				Argv: []string{"rm", "-rf", pkgDir}, Sudo: true,
-			})
-		}
-		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
-			return err
-		}
-		roothash, dataSize, err := layer.MakeVerity(staging,
-			filepath.Join(pkgDir, "image.img"), "pancake-state", 0,
-			"pancake-state")
-		if err != nil {
-			return err
-		}
-		if err := kit.WritePackageManifest(pkgDir, kit.PackageManifest{
-			Package: kit.PackageBlock{
-				Name: "pancake-state", Version: "1.0.0", Arch: "all",
-				Description: "post-install state (users, unit symlinks, ...)",
-			},
-			Image: kit.ImageBlock{DataSize: dataSize, Roothash: roothash},
-		}); err != nil {
-			return err
-		}
-		layers = append(layers, laidOut{"pancake-state", "1.0.0", "all", "pancake-state"})
-	}
-
-	// Synthetic kernel layers (only when --bzimage was given; the suite
-	// kernel route already produces linux-image-* + linux-modules-* layers
-	// naturally via the per-package staging loop above).
-	if a.BzImagePath != "" {
-		var err error
-		layers, err = packCustomKernel(tmp, repo, layers, a)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Synthetic pancaked layer: contains /usr/sbin/pancaked + the systemd
-	// unit so the daemon auto-starts at boot. Lives in its own verity
-	// layer so it's independently updatable via push (separate from
-	// pancake-state, which holds postinst orphans, and separate from
-	// /usr/local/bin/pancake which is in pancake-state today).
-	{
-		var err error
-		layers, err = packPancakedLayer(tmp, repo, layers, a)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Synthetic pancake-host layer: hostname, ssh host keys,
-	// authorized_keys. Carved out of the per-package + pancake-state
-	// layers (see isPerHostPath) so those layers can be shared across
-	// every machine in the fleet — only pancake-host varies per host.
-	{
-		var err error
-		layers, err = packPancakeHostLayer(tmp, repo, layers, a)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Synthetic pancake-orch-config layer: orchestrator-side trust
-	// anchors + ACME URLs. Per-deployment (same across every VM in
-	// the fleet, varies by orchestrator). No-op when the recipe's
-	// [orchestrator] section is empty (Slice 1 fallback).
-	{
-		var err error
-		layers, err = packOrchConfigLayer(tmp, repo, layers, a)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Overlay order: leaves (most-specific) first, base last.
-	// pancake-host at the very top so its hostname / ssh keys win over
-	// anything else (e.g. base-files' /etc/hostname). pancake-state
-	// next: post-install bits + the pancake/pancaked CLI runtime win
-	// over any package re-shipping the same paths. The synthetic
-	// kernel + modules layers go just below — they own /boot/vmlinuz
-	// and /lib/modules/<ver> exclusively, so order is mostly cosmetic,
-	// but putting them near the top keeps related layers visually
-	// adjacent in `pancake list` output.
-	byName := map[string]laidOut{}
-	for _, L := range layers {
-		byName[L.Name] = L
-	}
-	depFirst := topologicalOrder(pkgs, sandboxDir)
-	var overlay []laidOut
-	for _, name := range []string{
-		"pancake-host", "pancake-orch-config",
-		"pancake-state", "pancaked",
-		"pancake-kernel", "pancake-modules",
-	} {
-		if L, ok := byName[name]; ok {
-			overlay = append(overlay, L)
-		}
-	}
-	for i := len(depFirst) - 1; i >= 0; i-- {
-		if L, ok := byName[depFirst[i]]; ok {
-			overlay = append(overlay, L)
-		}
-	}
-
-	// Generation 1 manifest.
-	k := &kit.Kit{Dir: a.Output}
-	gm := kit.GenerationManifest{
-		Generation: kit.GenerationBlock{
-			ID: 1, Parent: 0, Counter: 1,
-			Description: fmt.Sprintf("initial generation (%d layers)", len(overlay)),
-		},
-	}
-	for _, L := range overlay {
-		gm.Layer = append(gm.Layer, kit.LayerRef{
-			Name: L.Name, Version: L.Version,
-			Manifest: fmt.Sprintf("repo/%s/manifest.toml", L.Dir),
-		})
-	}
-	if err := kit.WriteGenerationManifest(k, gm); err != nil {
-		return err
-	}
-	if err := k.SetCurrent(1); err != nil {
-		return err
-	}
-
-	// Sign the generation manifest if signing material was provided.
-	// Bootstrap auto-generates a self-signed dev pair if neither file
-	// exists yet, so the user gets a working signed kit on first run.
-	if a.SignKey != "" && a.SignCert != "" {
-		hostname := a.Hostname
-		if hostname == "" {
-			hostname = "pancake"
-		}
-		if generated, err := sign.EnsureKeyAndCert(
-			a.SignKey, a.SignCert, hostname); err != nil {
-			return fmt.Errorf("sign-key/sign-cert: %w", err)
-		} else if generated {
-			fmt.Fprintf(os.Stderr,
-				"\n[bootstrap] generated dev signing pair:\n"+
-					"  key:  %s\n  cert: %s\n"+
-					"  (use real keys for production; UEFI db enrollment "+
-					"required for Secure Boot to verify)\n",
-				a.SignKey, a.SignCert)
-		}
-		manifestPath := filepath.Join(k.Generations(), "1", "manifest.toml")
-		if _, err := sign.SignManifest(manifestPath, a.SignKey); err != nil {
-			return fmt.Errorf("sign manifest: %w", err)
-		}
-		fmt.Fprintf(os.Stderr,
-			"  → signed %s.sig (verifiable with `openssl dgst -sha256 "+
-				"-verify pubkey.pem -signature %s.sig %s`)\n",
-			manifestPath, manifestPath, manifestPath)
-	} else if a.SignKey != "" || a.SignCert != "" {
-		return fmt.Errorf("--sign-key and --sign-cert must both be set")
-	}
-
-	// bzImage hand-off for QEMU: do this BEFORE sandbox cleanup since the
-	// suite-kernel path reads /boot/vmlinuz-* out of the sandbox.
-	if a.BzImageOutPath != "" {
-		if err := exportBzImage(sandboxDir, a); err != nil {
-			return fmt.Errorf("bzimage-out: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "  → bzImage at %s\n", a.BzImageOutPath)
-	}
-
-	if !a.KeepSandbox {
-		_ = runner.Run(runner.Cmd{
-			Argv: []string{"rm", "-rf", sandboxDir}, Sudo: true,
-		})
-	}
-
-	fmt.Fprintf(os.Stderr, "\n[bootstrap] kit ready at %s\n", a.Output)
-	fmt.Fprintf(os.Stderr, "  layers: %d\n", len(overlay))
-	fmt.Fprintf(os.Stderr, "  generation: %s/manifest.toml\n",
-		filepath.Join(a.Output, "generations/1"))
-	fmt.Fprintln(os.Stderr, "  current → generations/1")
-
-	// Optional: pack disk image.
-	if a.ImagePath != "" {
-		fmt.Fprintf(os.Stderr,
-			"\n[bootstrap] packing disk image → %s\n", a.ImagePath)
-		if err := pack.Disk(a.Output, a.ImagePath); err != nil {
-			return fmt.Errorf("pack: %w", err)
-		}
-	}
-
-	// Optional: build initramfs.
-	if a.InitramfsPath != "" {
-		fmt.Fprintf(os.Stderr,
-			"\n[bootstrap] building initramfs (kernel=%s) → %s\n",
-			a.Kernel, a.InitramfsPath)
-		srcRoot := a.SrcRoot
-		if srcRoot == "" {
-			// Same default the bake step uses: derive from os.Executable.
-			if exe, err := os.Executable(); err == nil {
-				// .../tools/pancake-go/bin/pancake → fs-pancake/
-				srcRoot = filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(exe))))
-			}
-		}
-		// If signing is on, extract pubkey from cert into a temp file so
-		// the initramfs builder can bake it at /etc/pancake/manifest.pubkey.
-		var pubkeyPath string
-		if a.SignCert != "" {
-			pubkeyPath = filepath.Join(a.Output, ".pancake-manifest.pubkey")
-			if err := sign.PubkeyFromCert(a.SignCert, pubkeyPath); err != nil {
-				return fmt.Errorf("extract pubkey: %w", err)
-			}
-			defer os.Remove(pubkeyPath)
-		}
-		if err := initramfs.Build(initramfs.Opts{
-			OutPath:    a.InitramfsPath,
-			KVer:       a.Kernel,
-			SrcRoot:    srcRoot,
-			Suite:      a.Suite,
-			Mirror:     a.Mirror,
-			PubKeyPath: pubkeyPath,
-		}); err != nil {
-			return fmt.Errorf("initramfs: %w", err)
-		}
-	}
-
-	// Optional: build a UEFI-bootable disk image. Needs the bzImage and
-	// initramfs to exist; if either was suppressed via empty flags, error
-	// clearly rather than silently producing nothing.
-	if a.EFIPath != "" {
-		if a.BzImageOutPath == "" {
-			return fmt.Errorf("--efi requires --bzimage-out (the kernel " +
-				"to bundle into the UKI). Set both, or skip --efi.")
-		}
-		if a.InitramfsPath == "" {
-			return fmt.Errorf("--efi requires --initramfs (the initramfs " +
-				"to bundle into the UKI). Set both, or skip --efi.")
-		}
-		fmt.Fprintf(os.Stderr,
-			"\n[bootstrap] building UKI + EFI disk → %s\n", a.EFIPath)
-		uki := strings.TrimSuffix(a.EFIPath, filepath.Ext(a.EFIPath)) + ".uki.efi"
-		if err := efi.BuildUKI(efi.UKIOpts{
-			Linux:    a.BzImageOutPath,
-			Initrd:   a.InitramfsPath,
-			Cmdline:  a.Cmdline,
-			Out:      uki,
-			UName:    a.Kernel,
-			SignKey:  a.SignKey,
-			SignCert: a.SignCert,
-		}); err != nil {
-			return fmt.Errorf("uki: %w", err)
-		}
-		if err := efi.PackEFIDisk(efi.EFIDiskOpts{
-			Out:    a.EFIPath,
-			KitDir: a.Output,
-			UKI:    uki,
-			GenID:  1,
-		}); err != nil {
-			return fmt.Errorf("efi disk: %w", err)
-		}
-	}
-	return nil
-}
-
-func mmdebstrap(suite, mirror string, pkgs []string, dest string) error {
-	if _, err := os.Stat(dest); err == nil {
-		if err := runner.Run(runner.Cmd{
-			Argv: []string{"rm", "-rf", dest}, Sudo: true,
-		}); err != nil {
-			return err
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
-	}
-	return runner.Run(runner.Cmd{
-		Argv: []string{"mmdebstrap", "--variant=minbase",
-			"--components=main,universe",
-			"--include=" + strings.Join(pkgs, ","),
-			suite, dest, mirror},
-		Sudo: true,
-	})
-}
-
-// ignorePatterns: drop runtime + cache state, plus documentation trees
-// the system has no reader for (no `man`, `info`, or doc browser ships
-// in the baseline). KEEPS /var/lib/dpkg so the booted system can
-// `dpkg-query` what's installed.
-var ignorePatterns = []string{
-	"/var/cache/", "/var/log/", "/var/lib/apt/",
-	"/var/lib/systemd/random-seed",
-	"/run/", "/proc/", "/sys/", "/dev/", "/tmp/",
-	"/usr/share/man/", "/usr/share/info/", "/usr/share/doc/",
-	"/var/lib/ucf/",
-}
-
-func shouldIgnore(p string) bool {
-	for _, pat := range ignorePatterns {
-		if strings.HasPrefix(p, pat) {
-			return true
-		}
-	}
-	return false
-}
 
 func splitCSV(s string) []string {
 	parts := strings.Split(s, ",")
@@ -893,6 +464,12 @@ func dedup(xs []string) []string {
 // directory under repo/. Package-level so the synthetic-layer helpers
 // can return + extend it.
 type laidOut struct{ Name, Version, Arch, Dir string }
+
+// signPubkeyFromCert is a tiny indirection so the bake step can call into
+// internal/sign without growing the existing imports list ergonomics.
+func signPubkeyFromCert(certPath, outPath string) error {
+	return sign.PubkeyFromCert(certPath, outPath)
+}
 
 // packPancakedLayer synthesizes the "pancaked" verity layer: contains
 // the daemon binary at /usr/sbin/pancaked plus a systemd unit that auto-
@@ -1011,108 +588,6 @@ WantedBy=multi-user.target
 		return layers, err
 	}
 	layers = append(layers, laidOut{"pancaked", "1.0.0", "all", "pancaked"})
-	return layers, nil
-}
-
-// packOrchConfigLayer bakes the orchestrator-side trust anchors and
-// URLs into a signed verity layer mounted at /etc/pancake/orch/ in
-// the running VM. Contents:
-//
-//   /etc/pancake/orch/config.json
-//       {ca_url, attest_ca_url, step_ca_root, ahkcid_root, client_ca_root}
-//       — paths in the JSON are absolute paths INSIDE the VM, not
-//       on the build host.
-//   /etc/pancake/orch/step-ca-root.crt    PEM, the ACME server's TLS root
-//   /etc/pancake/orch/ahkcid-root.crt     PEM, the Attestation CA's TLS root
-//   /etc/pancake/orch/client-ca-root.crt  PEM, the CA whose client certs
-//                                          pancaked accepts on incoming mTLS
-//
-// `pancake enroll` reads config.json and uses these paths directly;
-// `pancaked` reads /etc/pancake/orch/client-ca-root.crt for its
-// gRPC client-cert trust pool. No flag plumbing required at runtime.
-//
-// No-op when the recipe omits the [orchestrator] section. Caller
-// guards on a.Orch.hasAll().
-func packOrchConfigLayer(tmp, repo string, layers []laidOut, a bootstrapArgs) ([]laidOut, error) {
-	if !a.Orch.hasAll() {
-		return layers, nil
-	}
-	fmt.Fprintln(os.Stderr,
-		"\n[bootstrap] packing pancake-orch-config layer (CA roots + URLs)")
-
-	staging := filepath.Join(tmp, "_pancake-orch-config")
-	orchDir := filepath.Join(staging, "etc/pancake/orch")
-	if err := os.MkdirAll(orchDir, 0o755); err != nil {
-		return layers, err
-	}
-
-	// Copy the three PEM files into the layer staging.
-	type copyJob struct{ src, dstName string }
-	jobs := []copyJob{
-		{a.Orch.StepCARoot, "step-ca-root.crt"},
-		{a.Orch.AhkcidRoot, "ahkcid-root.crt"},
-		{a.Orch.ClientCARoot, "client-ca-root.crt"},
-	}
-	for _, j := range jobs {
-		dst := filepath.Join(orchDir, j.dstName)
-		if err := copyFileLocal(j.src, dst); err != nil {
-			return layers, fmt.Errorf("copy %s → %s: %w", j.src, dst, err)
-		}
-		if err := os.Chmod(dst, 0o644); err != nil {
-			return layers, err
-		}
-	}
-
-	// Config.json — paths are absolute inside the running VM.
-	cfg := struct {
-		CAURL          string `json:"ca_url"`
-		AttestCAURL    string `json:"attest_ca_url"`
-		StepCARoot     string `json:"step_ca_root"`
-		AhkcidRoot     string `json:"ahkcid_root"`
-		ClientCARoot   string `json:"client_ca_root"`
-	}{
-		CAURL:        a.Orch.CAURL,
-		AttestCAURL:  a.Orch.AttestCAURL,
-		StepCARoot:   "/etc/pancake/orch/step-ca-root.crt",
-		AhkcidRoot:   "/etc/pancake/orch/ahkcid-root.crt",
-		ClientCARoot: "/etc/pancake/orch/client-ca-root.crt",
-	}
-	cfgBytes, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return layers, err
-	}
-	if err := os.WriteFile(filepath.Join(orchDir, "config.json"),
-		append(cfgBytes, '\n'), 0o644); err != nil {
-		return layers, err
-	}
-
-	pkgDir := filepath.Join(repo, "pancake-orch-config")
-	if _, err := os.Stat(pkgDir); err == nil {
-		_ = runner.Run(runner.Cmd{
-			Argv: []string{"rm", "-rf", pkgDir}, Sudo: true,
-		})
-	}
-	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
-		return layers, err
-	}
-	roothash, dataSize, err := layer.MakeVerity(staging,
-		filepath.Join(pkgDir, "image.img"),
-		"pancake-orch-config", 0, "pancake-orch-config")
-	if err != nil {
-		return layers, err
-	}
-	if err := kit.WritePackageManifest(pkgDir, kit.PackageManifest{
-		Package: kit.PackageBlock{
-			Name: "pancake-orch-config", Version: "1.0.0", Arch: "all",
-			Description: "orchestrator trust anchors + ACME URLs " +
-				"(per-deployment; baked at bootstrap)",
-		},
-		Image: kit.ImageBlock{DataSize: dataSize, Roothash: roothash},
-	}); err != nil {
-		return layers, err
-	}
-	layers = append(layers, laidOut{
-		"pancake-orch-config", "1.0.0", "all", "pancake-orch-config"})
 	return layers, nil
 }
 
@@ -1604,43 +1079,6 @@ func packCustomKernel(tmp, repo string, layers []laidOut, a bootstrapArgs) ([]la
 	}
 
 	return layers, nil
-}
-
-// exportBzImage drops a copy of the kernel binary at a.BzImageOutPath so
-// QEMU's `-kernel` arg can point at it without mounting the kit.
-//
-//   - If --bzimage was given: just copy that path to BzImageOutPath.
-//   - Else: find /boot/vmlinuz-* in the sandbox (placed there by
-//     linux-image-X.Y.Z's .deb extraction) and copy the newest one.
-func exportBzImage(sandbox string, a bootstrapArgs) error {
-	if a.BzImagePath != "" {
-		return copyFileLocal(a.BzImagePath, a.BzImageOutPath)
-	}
-	bootDir := filepath.Join(sandbox, "boot")
-	ents, err := os.ReadDir(bootDir)
-	if err != nil {
-		return fmt.Errorf("no /boot in sandbox (linux-image-generic "+
-			"didn't install?): %w", err)
-	}
-	var newest string
-	var newestMtime int64
-	for _, e := range ents {
-		if !strings.HasPrefix(e.Name(), "vmlinuz-") {
-			continue
-		}
-		fi, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if fi.ModTime().Unix() > newestMtime {
-			newest = filepath.Join(bootDir, e.Name())
-			newestMtime = fi.ModTime().Unix()
-		}
-	}
-	if newest == "" {
-		return fmt.Errorf("no vmlinuz-* in %s", bootDir)
-	}
-	return copyFileLocal(newest, a.BzImageOutPath)
 }
 
 // copyFileLocal copies src→dst using `install` so we can stamp ownership

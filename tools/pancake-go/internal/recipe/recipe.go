@@ -1,41 +1,45 @@
-// Package recipe parses a TOML recipe file for `pancake bootstrap`.
+// Package recipe parses a YAML recipe file for `pancake bootstrap`.
 //
-// Layout (one canonical example, with everything optional except
-// `output`):
+// Layout (one canonical example, every field optional — `output`
+// defaults to the current working directory and is overridable
+// with `-o` / `--output` on the CLI):
 //
-//	output   = "/var/tmp/pancake-kit"
-//	hostname = "pancake"
-//	packages = ["openssh-server", "chrony"]
+//	output: /var/tmp/pancake-kit
+//	hostname: pancake
+//	builder: localhost:7879
+//	packages:
+//	  - openssh-server
+//	  - chrony
 //
-//	[distro]
-//	suite  = "noble"
-//	mirror = "http://archive.ubuntu.com/ubuntu/"
+//	distro:
+//	  suite: noble
+//	  mirror: http://archive.ubuntu.com/ubuntu/
 //
-//	[ssh]
-//	authorized-keys = "/home/foo/.ssh/authorized_keys"
-//	host-keys-dir   = ""    # empty → generate fresh
+//	ssh:
+//	  authorized-keys: /home/foo/.ssh/authorized_keys
+//	  host-keys-dir: ""    # empty → generate fresh
 //
-//	[kernel]
-//	version = "7.0.0-g..."  # default uname -r; "tree"/"local" → read
-//	                        # the version out of `bzimage` below
-//	bzimage = "/path/to/bzImage"   # empty → suite linux-image-generic
-//	cmdline = "console=ttyS0 rdinit=/init pancake.state=LABEL=PANCAKE_STATE"
+//	kernel:
+//	  version: "7.0.0-g..."   # default uname -r; "tree"/"local" → read
+//	                          # the version out of `bzimage` below
+//	  bzimage: /path/to/bzImage   # empty → suite linux-image-generic
+//	  cmdline: console=ttyS0 rdinit=/init pancake.state=LABEL=PANCAKE_STATE
 //
-//	[outputs]
-//	image     = "./pancake-state.img"
-//	initramfs = "./pancake-initramfs.cpio.gz"
-//	bzimage   = "./pancake-bzImage"
-//	efi       = ""          # empty → skip EFI disk
+//	outputs:
+//	  image:     ./pancake-state.img
+//	  initramfs: ./pancake-initramfs.cpio.gz
+//	  bzimage:   ./pancake-bzImage
+//	  efi:       ""           # empty → skip EFI disk
 //
-//	[signing]
-//	key  = "./pancake-dev.key"
-//	cert = "./pancake-dev.crt"
+//	signing:
+//	  key:  ./pancake-dev.key
+//	  cert: ./pancake-dev.crt
 //
-//	[advanced]
-//	keep-sandbox = false
-//	src-root     = ""
-//	pancake-bin  = ""       # default sibling of running executable
-//	pancaked-bin = ""       # default sibling
+//	advanced:
+//	  keep-sandbox: false
+//	  src-root:     ""
+//	  pancake-bin:  ""        # default sibling of running executable
+//	  pancaked-bin: ""        # default sibling
 //
 // Resolution rules:
 //   - All paths in the recipe are interpreted relative to the current
@@ -44,7 +48,7 @@
 //   - CLI flags override recipe values: precedence is flag > recipe >
 //     internal default. The bootstrap dispatcher uses flag.Visit() to
 //     detect which flags the user actually set.
-//   - Unknown TOML keys cause a parse error (catches typos).
+//   - Unknown YAML keys cause a parse error (catches typos).
 package recipe
 
 import (
@@ -54,81 +58,99 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pelletier/go-toml/v2"
+	"gopkg.in/yaml.v3"
 )
 
-// Recipe mirrors the TOML schema. All fields are pointers OR slices so we
+// Recipe mirrors the YAML schema. All fields are pointers OR slices so we
 // can distinguish "not specified" (nil/empty) from "explicitly set to
 // zero" — only "not specified" defers to flag/default.
 type Recipe struct {
-	Output   string   `toml:"output"`
-	Hostname string   `toml:"hostname"`
-	Packages []string `toml:"packages"`
+	Output   string   `yaml:"output"`
+	Hostname string   `yaml:"hostname"`
+	Packages []string `yaml:"packages"`
 
-	Distro       Distro       `toml:"distro"`
-	SSH          SSH          `toml:"ssh"`
-	Kernel       Kernel       `toml:"kernel"`
-	Outputs      Outputs      `toml:"outputs"`
-	Signing      Signing      `toml:"signing"`
-	Advanced     Advanced     `toml:"advanced"`
-	Orchestrator Orchestrator `toml:"orchestrator"`
+	// Builder is the address of the pancake-build-server that will
+	// assemble the kit (e.g. "localhost:7879"). The CLI's --builder
+	// flag overrides this. Required: with no value from either
+	// source, `pancake bootstrap` exits with an error — the local
+	// build path is gone, "build offline" means run the build
+	// server locally via the compose stack.
+	Builder string `yaml:"builder"`
+
+	Distro       Distro       `yaml:"distro"`
+	SSH          SSH          `yaml:"ssh"`
+	Kernel       Kernel       `yaml:"kernel"`
+	Outputs      Outputs      `yaml:"outputs"`
+	Signing      Signing      `yaml:"signing"`
+	Advanced     Advanced     `yaml:"advanced"`
+	Orchestrator Orchestrator `yaml:"orchestrator"`
 }
 
-// Orchestrator carries the trust anchors + URLs the in-VM
-// `pancake enroll` and `pancaked` need to talk to the orchestrator.
-// All five fields baked into a signed verity layer at bootstrap
-// time and mounted read-only at /etc/pancake/orch/ in the running
-// VM. Empty section = no orch-config layer is built (Slice 1
-// fallback: VM accepts manual cert delivery).
+// Orchestrator declares where the orchestrator's CA + Attestation
+// CA live and points at PEM trust roots for both, plus the client
+// CA root pancaked uses to authenticate orchestrator-pushed
+// requests. Bootstrap bakes all five into a signed verity layer at
+// /etc/pancake/orch/ in the running VM. Empty section = no
+// orch-config layer is built.
 type Orchestrator struct {
-	StepCARoot   string `toml:"step-ca-root"`
-	AhkcidRoot   string `toml:"ahkcid-root"`
-	ClientCARoot string `toml:"client-ca-root"`
-	CAURL        string `toml:"ca-url"`
-	AttestCAURL  string `toml:"attest-ca-url"`
+	// CAURL — what the VM uses to talk to step-ca's ACME endpoint
+	// (e.g. https://orchestrator:8443/acme/tpm/directory).
+	CAURL string `yaml:"ca-url"`
+	// AttestCAURL — what the VM uses to talk to ahkcid
+	// (e.g. https://orchestrator:8444).
+	AttestCAURL string `yaml:"attest-ca-url"`
+
+	// StepCARoot — PEM trust root for CAURL's TLS server cert.
+	StepCARoot string `yaml:"step-ca-root"`
+	// AhkcidRoot — PEM trust root for AttestCAURL's TLS server
+	// cert.
+	AhkcidRoot string `yaml:"ahkcid-root"`
+	// ClientCARoot — PEM cert pancaked uses to verify
+	// orchestrator-presented client certs (mTLS root).
+	ClientCARoot string `yaml:"client-ca-root"`
 }
 
 type Distro struct {
-	Suite  string `toml:"suite"`
-	Mirror string `toml:"mirror"`
+	Suite  string `yaml:"suite"`
+	Mirror string `yaml:"mirror"`
 }
 
 type SSH struct {
-	AuthorizedKeys string `toml:"authorized-keys"`
-	HostKeysDir    string `toml:"host-keys-dir"`
+	AuthorizedKeys string `yaml:"authorized-keys"`
+	HostKeysDir    string `yaml:"host-keys-dir"`
 }
 
 type Kernel struct {
-	Version string `toml:"version"`
-	BzImage string `toml:"bzimage"`
-	Cmdline string `toml:"cmdline"`
+	Version string `yaml:"version"`
+	BzImage string `yaml:"bzimage"`
+	Cmdline string `yaml:"cmdline"`
 }
 
 type Outputs struct {
 	// Image is the rootfs ext4 disk; corresponds to bootstrap --image.
-	Image string `toml:"image"`
+	Image string `yaml:"image"`
 	// Initramfs is the cpio.gz blob; corresponds to --initramfs.
-	Initramfs string `toml:"initramfs"`
+	Initramfs string `yaml:"initramfs"`
 	// BzImage is the kernel binary copy for QEMU's -kernel arg;
 	// corresponds to --bzimage-out (NOT --bzimage which is the input).
-	BzImage string `toml:"bzimage"`
+	BzImage string `yaml:"bzimage"`
 	// EFI is the UEFI-bootable disk; corresponds to --efi.
-	EFI string `toml:"efi"`
+	EFI string `yaml:"efi"`
 }
 
 type Signing struct {
-	Key  string `toml:"key"`
-	Cert string `toml:"cert"`
+	Key  string `yaml:"key"`
+	Cert string `yaml:"cert"`
 }
 
 type Advanced struct {
-	KeepSandbox bool   `toml:"keep-sandbox"`
-	SrcRoot     string `toml:"src-root"`
-	PancakeBin  string `toml:"pancake-bin"`
-	PancakedBin string `toml:"pancaked-bin"`
+	KeepSandbox bool   `yaml:"keep-sandbox"`
+	SrcRoot     string `yaml:"src-root"`
+	PancakeBin  string `yaml:"pancake-bin"`
+	PancakedBin string `yaml:"pancaked-bin"`
 }
 
-// Load reads + parses a recipe file. Strict mode: unknown TOML keys
+// Load reads + parses a recipe file. Strict mode: unknown YAML keys
 // cause a parse error so typos are caught early.
 func Load(path string) (*Recipe, error) {
 	data, err := os.ReadFile(path)
@@ -136,8 +158,8 @@ func Load(path string) (*Recipe, error) {
 		return nil, fmt.Errorf("read recipe: %w", err)
 	}
 	var r Recipe
-	dec := toml.NewDecoder(strings.NewReader(string(data)))
-	dec.DisallowUnknownFields()
+	dec := yaml.NewDecoder(strings.NewReader(string(data)))
+	dec.KnownFields(true)
 	if err := dec.Decode(&r); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
@@ -199,4 +221,4 @@ func userHome() string {
 
 // DefaultRecipePath is the file pancake bootstrap auto-loads if no
 // positional recipe arg is given and the file exists.
-const DefaultRecipePath = "./pancake-recipe.toml"
+const DefaultRecipePath = "./pancake-recipe.yaml"

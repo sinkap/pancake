@@ -66,7 +66,7 @@ Every layer is a dm-verity-signed ext4 image. Rootfs = `mount -t overlay`.
 ## How a kit gets built
 
 ```
-  recipe.toml ────────────────►  pancake bootstrap --builder=…
+  recipe.yaml ────────────────►  pancake bootstrap --builder=…
                                           │
                                           │ gRPC: BuildGeneration
                                           ▼

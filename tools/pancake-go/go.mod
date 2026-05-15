@@ -8,6 +8,7 @@ require (
 	github.com/google/go-sev-guest v0.14.1
 	github.com/google/go-tpm v0.9.8
 	github.com/pelletier/go-toml/v2 v2.2.4
+	gopkg.in/yaml.v3 v3.0.1
 	github.com/smallstep/certificates v0.30.2
 	go.step.sm/crypto v0.80.0
 	google.golang.org/grpc v1.81.0
