@@ -2,8 +2,9 @@
 # `envsubst` in demo.sh; every $VAR here is expected to be defined
 # in the calling shell environment:
 #
-#   KIT, BUILDER, BZIMAGE, INITRAMFS, BZ_OUT, EFI_IMG, KEY, CERT,
+#   KIT, BUILDER, BZIMAGE, INITRAMFS, BZ_OUT, EFI_IMG,
 #   AUTH_KEY, ORCH_URL
+#
 #
 # Anything else passes through unchanged. Comments stay because
 # envsubst does not filter them.
@@ -31,10 +32,6 @@ outputs:
   initramfs: ${INITRAMFS}
   bzimage:   ${BZ_OUT}
   efi:       ${EFI_IMG}
-
-signing:
-  key:  ${KEY}
-  cert: ${CERT}
 
 orchestrator:
   # Single gateway URL. Build server expands into per-protocol paths

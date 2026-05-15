@@ -30,3 +30,6 @@ vm/keys/
 *.a
 initramfs/mount-overlay
 pancake-state.img
+tools/pancake-go/pancake
+tools/pancake-go/pancaked
+tools/pancake-go/pancake-build-server

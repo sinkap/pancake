@@ -31,16 +31,6 @@
 //	  bzimage:   ./pancake-bzImage
 //	  efi:       ""           # empty → skip EFI disk
 //
-//	signing:
-//	  key:  ./pancake-dev.key
-//	  cert: ./pancake-dev.crt
-//
-//	advanced:
-//	  keep-sandbox: false
-//	  src-root:     ""
-//	  pancake-bin:  ""        # default sibling of running executable
-//	  pancaked-bin: ""        # default sibling
-//
 // Resolution rules:
 //   - All paths in the recipe are interpreted relative to the current
 //     working directory (NOT relative to the recipe file). `~` is
@@ -81,8 +71,6 @@ type Recipe struct {
 	SSH          SSH          `yaml:"ssh"`
 	Kernel       Kernel       `yaml:"kernel"`
 	Outputs      Outputs      `yaml:"outputs"`
-	Signing      Signing      `yaml:"signing"`
-	Advanced     Advanced     `yaml:"advanced"`
 	Orchestrator Orchestrator `yaml:"orchestrator"`
 }
 
@@ -126,18 +114,6 @@ type Outputs struct {
 	EFI string `yaml:"efi"`
 }
 
-type Signing struct {
-	Key  string `yaml:"key"`
-	Cert string `yaml:"cert"`
-}
-
-type Advanced struct {
-	KeepSandbox bool   `yaml:"keep-sandbox"`
-	SrcRoot     string `yaml:"src-root"`
-	PancakeBin  string `yaml:"pancake-bin"`
-	PancakedBin string `yaml:"pancaked-bin"`
-}
-
 // Load reads + parses a recipe file. Strict mode: unknown YAML keys
 // cause a parse error so typos are caught early.
 func Load(path string) (*Recipe, error) {
@@ -163,8 +139,6 @@ func (r *Recipe) expandPaths() {
 		&r.SSH.AuthorizedKeys, &r.SSH.HostKeysDir,
 		&r.Kernel.BzImage,
 		&r.Outputs.Image, &r.Outputs.Initramfs, &r.Outputs.BzImage, &r.Outputs.EFI,
-		&r.Signing.Key, &r.Signing.Cert,
-		&r.Advanced.SrcRoot, &r.Advanced.PancakeBin, &r.Advanced.PancakedBin,
 	} {
 		*p = ExpandPath(*p)
 	}
