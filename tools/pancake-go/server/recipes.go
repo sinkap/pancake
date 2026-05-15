@@ -549,32 +549,43 @@ func (s *Server) bakePancakeHost(
 
 // ----- orch-config ---------------------------------------------------
 
-// bakeOrchConfig: orchestrator trust anchors + URLs at /etc/pancake/orch/.
-// Inputs (all blobs; URLs encoded as their string bytes):
+// bakeOrchConfig stages the per-deployment orchestrator-config layer:
+// the gateway URL (operator-supplied via in.Version, recycled here
+// for the single string parameter), and the gateway's TLS trust
+// root (read from the build server's local trust volume — recipe
+// carries no PEMs, so the operator never extracts certs from
+// running containers). The build server expands the single URL into
+// the per-protocol paths the in-VM `pancake enroll` and `pancaked`
+// expect.
 //
-//	blobs[ca-url]            required (raw bytes = step-ca ACME URL)
-//	blobs[attest-ca-url]     required (raw bytes = ahkcid URL)
-//	blobs[step-ca-root]      required (PEM)
-//	blobs[ahkcid-root]       required (PEM)
-//	blobs[client-ca-root]    required (PEM)
+// Layer contents:
+//
+//	/etc/pancake/orch/url             raw text, one line
+//	/etc/pancake/orch/trust-root.crt  PEM, gateway TLS root
+//	/etc/pancake/orch/config.json     {url, ca_url, attest_ca_url,
+//	                                   trust_root, client_ca_root}
+//
+// trust_root and client_ca_root point at the same trust-root.crt for
+// dev — both directions of the orchestrator <-> VM trust chain
+// anchor at the same step-ca root. Production deployments that want
+// a distinct client-cert CA can swap the file via volume mount.
 func (s *Server) bakeOrchConfig(
 	workRoot string, in *buildpb.PancakeInternal,
 ) (*buildpb.LayerHandle, error) {
-	required := []string{
-		"ca-url", "attest-ca-url",
-		"step-ca-root", "ahkcid-root", "client-ca-root",
+	url := strings.TrimSpace(in.Version)
+	if url == "" {
+		return nil, fmt.Errorf("orch-config: version field (recycled " +
+			"for the single orchestrator URL) required")
 	}
-	bytesByRole := map[string][]byte{}
-	for _, r := range required {
-		sha := in.Blobs[r]
-		if sha == "" {
-			return nil, fmt.Errorf("orch-config: blobs[%s] required", r)
-		}
-		b, err := s.readBlob(sha)
-		if err != nil {
-			return nil, err
-		}
-		bytesByRole[r] = b
+	if s.trustDir == "" {
+		return nil, fmt.Errorf("orch-config: server has no --trust-dir " +
+			"configured; cannot locate the gateway TLS trust root")
+	}
+	trustPath := filepath.Join(s.trustDir, "trust-root.crt")
+	rootBytes, err := os.ReadFile(trustPath)
+	if err != nil {
+		return nil, fmt.Errorf("orch-config: read trust root %s: %w",
+			trustPath, err)
 	}
 
 	staging, err := os.MkdirTemp(workRoot, "stage-orch-")
@@ -585,24 +596,27 @@ func (s *Server) bakeOrchConfig(
 	if err := os.MkdirAll(orchDir, 0o755); err != nil {
 		return nil, err
 	}
-	for _, role := range []string{"step-ca-root", "ahkcid-root", "client-ca-root"} {
-		if err := os.WriteFile(filepath.Join(orchDir, role+".crt"),
-			bytesByRole[role], 0o644); err != nil {
-			return nil, err
-		}
+	if err := os.WriteFile(filepath.Join(orchDir, "url"),
+		[]byte(url+"\n"), 0o644); err != nil {
+		return nil, err
 	}
+	if err := os.WriteFile(filepath.Join(orchDir, "trust-root.crt"),
+		rootBytes, 0o644); err != nil {
+		return nil, err
+	}
+	base := strings.TrimRight(url, "/")
 	cfg := struct {
+		URL          string `json:"url"`
 		CAURL        string `json:"ca_url"`
 		AttestCAURL  string `json:"attest_ca_url"`
-		StepCARoot   string `json:"step_ca_root"`
-		AttestCARoot   string `json:"ahkcid_root"`
+		TrustRoot    string `json:"trust_root"`
 		ClientCARoot string `json:"client_ca_root"`
 	}{
-		CAURL:        strings.TrimSpace(string(bytesByRole["ca-url"])),
-		AttestCAURL:  strings.TrimSpace(string(bytesByRole["attest-ca-url"])),
-		StepCARoot:   "/etc/pancake/orch/step-ca-root.crt",
-		AttestCARoot:   "/etc/pancake/orch/ahkcid-root.crt",
-		ClientCARoot: "/etc/pancake/orch/client-ca-root.crt",
+		URL:          url,
+		CAURL:        base + "/acme/tpm/directory",
+		AttestCAURL:  base + "/attest-ca",
+		TrustRoot:    "/etc/pancake/orch/trust-root.crt",
+		ClientCARoot: "/etc/pancake/orch/trust-root.crt",
 	}
 	cfgBytes, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -614,5 +628,5 @@ func (s *Server) bakeOrchConfig(
 	}
 	return s.bakeStaged(workRoot, staging,
 		"pancake-orch-config", "1.0.0", "all",
-		"orchestrator trust anchors + ACME URLs (per-deployment)")
+		"orchestrator gateway URL + TLS trust root (per-deployment)")
 }

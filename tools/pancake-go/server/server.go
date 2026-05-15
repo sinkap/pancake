@@ -26,6 +26,7 @@ import (
 type Server struct {
 	buildpb.UnimplementedPancakeBuilderServer
 	cacheDir       string
+	trustDir       string
 	bundledBinsDir string
 	// signer routes UKI + manifest signing through whatever the
 	// server is configured to use: sign.LocalSigner for in-process
@@ -45,6 +46,9 @@ type Opts struct {
 	// when the operator doesn't upload override blobs. Empty
 	// disables the fallback (operator must upload everything).
 	BundledBinsDir string
+	// TrustDir is where bakeOrchConfig reads trust-root.crt from.
+	// Mounted RO from the shared pancake-trust docker volume in compose.
+	TrustDir string
 	// Signer (optional): when set, AssembleImage and any future
 	// signed-artifact path routes through it. See Server.signer.
 	Signer sign.Signer
@@ -61,6 +65,7 @@ func New(o Opts) (*Server, error) {
 	}
 	return &Server{
 		cacheDir:       o.CacheDir,
+		trustDir:       o.TrustDir,
 		bundledBinsDir: o.BundledBinsDir,
 		signer:         o.Signer,
 	}, nil

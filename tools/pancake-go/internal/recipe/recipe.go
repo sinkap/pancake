@@ -86,28 +86,16 @@ type Recipe struct {
 	Orchestrator Orchestrator `yaml:"orchestrator"`
 }
 
-// Orchestrator declares where the orchestrator's CA + Attestation
-// CA live and points at PEM trust roots for both, plus the client
-// CA root pancaked uses to authenticate orchestrator-pushed
-// requests. Bootstrap bakes all five into a signed verity layer at
-// /etc/pancake/orch/ in the running VM. Empty section = no
+// Orchestrator declares the single endpoint of the orchestrator
+// gateway. The build server expands this URL into the per-protocol
+// paths the VM uses (URL/acme/tpm/directory for ACME-tpm,
+// URL/attest-ca for AK enrollment), and bakes the trust root for
+// the gateway's TLS cert — read from the build server's local
+// trust volume, NOT from the recipe — into the signed verity layer
+// at /etc/pancake/orch/ inside the running VM. Empty URL = no
 // orch-config layer is built.
 type Orchestrator struct {
-	// CAURL — what the VM uses to talk to step-ca's ACME endpoint
-	// (e.g. https://orchestrator:8443/acme/tpm/directory).
-	CAURL string `yaml:"ca-url"`
-	// AttestCAURL — what the VM uses to talk to ahkcid
-	// (e.g. https://orchestrator:8444).
-	AttestCAURL string `yaml:"attest-ca-url"`
-
-	// StepCARoot — PEM trust root for CAURL's TLS server cert.
-	StepCARoot string `yaml:"step-ca-root"`
-	// AttestCARoot — PEM trust root for AttestCAURL's TLS server
-	// cert.
-	AttestCARoot string `yaml:"ahkcid-root"`
-	// ClientCARoot — PEM cert pancaked uses to verify
-	// orchestrator-presented client certs (mTLS root).
-	ClientCARoot string `yaml:"client-ca-root"`
+	URL string `yaml:"url"`
 }
 
 type Distro struct {
@@ -177,8 +165,6 @@ func (r *Recipe) expandPaths() {
 		&r.Outputs.Image, &r.Outputs.Initramfs, &r.Outputs.BzImage, &r.Outputs.EFI,
 		&r.Signing.Key, &r.Signing.Cert,
 		&r.Advanced.SrcRoot, &r.Advanced.PancakeBin, &r.Advanced.PancakedBin,
-		&r.Orchestrator.StepCARoot, &r.Orchestrator.AttestCARoot,
-		&r.Orchestrator.ClientCARoot,
 	} {
 		*p = ExpandPath(*p)
 	}

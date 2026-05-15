@@ -1,20 +1,21 @@
 # Brings up the pancake orchestrator-side stack:
 #
 #   pancake-ca-server     step-ca, ACME-tpm provisioner       :8443
-#   pancake-attest-ca        TPM AK Attestation CA               :8444
+#   pancake-attest-ca     TPM AK Attestation CA               :8444
 #   pancake-build-server  gRPC layer cache + builder          :7879
 #   pancake-sign          UKI + manifest signing service      :7880
+#
+# Shared volume `pancake-trust` carries the gateway's TLS trust root
+# (step-ca's root cert) — written by pancake-ca-server's init.sh on
+# first boot, consumed RO by pancake-build-server when baking the
+# orch-config layer. Operators never extract certs from running
+# containers.
 #
 # Run from this directory:
 #
 #   docker compose up -d --build
 #
 # State persists in named volumes; `docker compose down -v` wipes it.
-#
-# The three services are independent at startup — step-ca's
-# ACME-tpm provisioner does not need attest-ca's root at boot time;
-# the operator wires it in later via `pancake ca-server
-# enroll-device` (or by setting attestationRoots in ca.json).
 
 services:
   pancake-ca-server:
@@ -25,13 +26,14 @@ services:
     ports:
       - "8443:8443"
     environment:
-      # Service name included so other containers can reach the CA
-      # over the compose-provided network without TLS hostname
-      # mismatches.
       PANCAKE_CA_DNS: "pancake-ca-server,localhost,127.0.0.1"
       PANCAKE_CA_NAME: "pancake-demo"
     volumes:
       - pancake-ca-state:/home/step
+      # Writes /pancake-trust/trust-root.crt on first boot so the
+      # build server can pick it up without HTTP fetch / operator
+      # extraction. See ca-server/init.sh.
+      - pancake-trust:/pancake-trust
 
   pancake-attest-ca:
     build:
@@ -42,7 +44,7 @@ services:
     ports:
       - "8444:8444"
     volumes:
-      - pancake-attest-ca-state:/home/attest-ca
+      - pancake-attest-ca-state:/home/attestca
 
   pancake-build-server:
     build:
@@ -63,14 +65,16 @@ services:
       - "7879:7879"
     volumes:
       - pancake-build-cache:/var/lib/pancake-build-server
-    # Route signing through pancake-sign so the build server holds
-    # no private key. Compose-internal hostname; the docker network
-    # provides DNS.
+      # Read-only mount of the shared trust volume so bakeOrchConfig
+      # can read trust-root.crt without HTTP fetch / blob upload.
+      - pancake-trust:/var/lib/pancake-build-server/trust:ro
     command:
       - "-listen=:7879"
       - "-cache=/var/lib/pancake-build-server"
+      - "-trust-dir=/var/lib/pancake-build-server/trust"
       - "-sign-addr=http://pancake-sign:7880"
     depends_on:
+      - pancake-ca-server
       - pancake-sign
 
   pancake-sign:
@@ -89,3 +93,4 @@ volumes:
   pancake-attest-ca-state:
   pancake-build-cache:
   pancake-sign-state:
+  pancake-trust:

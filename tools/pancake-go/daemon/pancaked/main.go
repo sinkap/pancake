@@ -40,7 +40,7 @@ const (
 	// signed pancake-orch-config verity layer at bootstrap time.
 	// Preferred over defaultCAFile, which is the legacy Slice 1
 	// path where the operator scp'd a cert post-boot.
-	defaultOrchCAFile   = "/etc/pancake/orch/client-ca-root.crt"
+	defaultOrchCAFile   = "/etc/pancake/orch/trust-root.crt"
 	defaultCAFile       = "/etc/pancake/ca.crt"
 	defaultCertFile     = "/etc/pancake/server.crt"
 	defaultKeyFile      = "/etc/pancake/server.key"

@@ -19,6 +19,11 @@ func main() {
 	addr := flag.String("listen", ":7879", "gRPC listen address")
 	cacheDir := flag.String("cache", "/var/lib/pancake-build-server",
 		"cache directory root (created if missing)")
+	trustDir := flag.String("trust-dir",
+		"/var/lib/pancake-build-server/trust",
+		"directory holding trust-root.crt + other PEMs the build server "+
+			"reads when baking the orch-config layer. Mounted RO from the "+
+			"shared pancake-trust docker volume in compose.")
 	bundledBinsDir := flag.String("bundled-bins-dir",
 		"/usr/local/share/pancake-bundled",
 		"directory where the container image stages pancake / pancaked "+
@@ -60,6 +65,7 @@ func main() {
 	srv, err := server.New(server.Opts{
 		CacheDir:       *cacheDir,
 		BundledBinsDir: *bundledBinsDir,
+		TrustDir:       *trustDir,
 		Signer:         signer,
 	})
 	if err != nil {

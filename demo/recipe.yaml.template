@@ -1,15 +1,16 @@
-# Demo recipe for pancake-os end-to-end smoke. Paths are
-# substituted by `envsubst` from demo.sh; every $VAR here is
-# expected to be defined in the calling shell environment:
+# Demo recipe for pancake-os end-to-end smoke. Substituted by
+# `envsubst` in demo.sh; every $VAR here is expected to be defined
+# in the calling shell environment:
 #
-#   KIT, BZIMAGE, INITRAMFS, BZ_OUT, EFI_IMG, KEY, CERT, REPO,
-#   AUTH_KEY, WORK, CA_DIR, CA_PORT, ATTEST_CA_PORT
+#   KIT, BUILDER, BZIMAGE, INITRAMFS, BZ_OUT, EFI_IMG, KEY, CERT,
+#   AUTH_KEY, ORCH_URL
 #
-# Anything else in the file is passed through unchanged. Comments
-# stay because envsubst doesn't filter them.
+# Anything else passes through unchanged. Comments stay because
+# envsubst does not filter them.
 
-output: ${KIT}
+output:   ${KIT}
 hostname: pancake-demo
+builder:  ${BUILDER}
 packages:
   - openssh-server
   - chrony
@@ -26,25 +27,18 @@ kernel:
   bzimage: ${BZIMAGE}
 
 outputs:
-  image: ""
+  image:     ""
   initramfs: ${INITRAMFS}
-  bzimage: ${BZ_OUT}
-  efi: ${EFI_IMG}
+  bzimage:   ${BZ_OUT}
+  efi:       ${EFI_IMG}
 
 signing:
-  key: ${KEY}
+  key:  ${KEY}
   cert: ${CERT}
 
-advanced:
-  src-root: ${REPO}
-
 orchestrator:
-  # Trust anchors + URLs baked into the pancake-orch-config verity
-  # layer. URLs use 10.0.2.2 (QEMU's host gateway from inside
-  # user-mode networking) so the in-VM enroll can reach the host
-  # containers without DNS or extra routing setup.
-  ca-url: https://10.0.2.2:${CA_PORT}/acme/tpm/directory
-  attest-ca-url: https://10.0.2.2:${ATTEST_CA_PORT}
-  step-ca-root: ${WORK}/step-ca-root.crt
-  attest-ca-root: ${WORK}/attest-ca-root.crt
-  client-ca-root: ${CA_DIR}/ca.crt
+  # Single gateway URL. Build server expands into per-protocol paths
+  # (URL/acme/tpm/directory + URL/attest-ca) and bakes the trust
+  # root from its local trust volume into the orch-config layer.
+  # Recipe carries no PEMs.
+  url: ${ORCH_URL}

@@ -72,12 +72,11 @@ recipe {
 
 recipe {
   name: "orch-config"
-  description: "Orchestrator trust anchors + URLs at "
-               "/etc/pancake/orch/. URLs are blobs (raw string "
-               "bytes); roots are PEM blobs."
-  required_blobs: "ca-url"
-  required_blobs: "attest-ca-url"
-  required_blobs: "step-ca-root"
-  required_blobs: "ahkcid-root"
-  required_blobs: "client-ca-root"
+  description: "Orchestrator gateway URL + TLS trust root at "
+               "/etc/pancake/orch/. The single URL goes in "
+               "version (recycled); the trust root is read "
+               "by the build server from its local trust volume "
+               "(--trust-dir/trust-root.crt) — recipe carries no "
+               "PEMs."
+  requires_version: true
 }

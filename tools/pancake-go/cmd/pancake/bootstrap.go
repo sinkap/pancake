@@ -169,13 +169,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			sshHostKeys, sshAuthKeys, pancakeBin, pancakedBin, srcRoot,
 			image, initramfsPath, kernel, bzimage, bzimageOut,
 			efiOut, cmdline, signKey, signCert, builder)
-		orch = OrchArgs{
-			StepCARoot:   r.Orchestrator.StepCARoot,
-			AttestCARoot:   r.Orchestrator.AttestCARoot,
-			ClientCARoot: r.Orchestrator.ClientCARoot,
-			CAURL:        r.Orchestrator.CAURL,
-			AttestCAURL:  r.Orchestrator.AttestCAURL,
-		}
+		orch = OrchArgs{URL: r.Orchestrator.URL}
 	}
 
 	// Sentinel kernel versions: "tree" / "local" mean "read it out of
@@ -408,25 +402,17 @@ type bootstrapArgs struct {
 	Orch OrchArgs
 }
 
-// OrchArgs mirrors recipe.Orchestrator. Pulled out into its own
-// struct so the bootstrap helpers can pass it around without
-// dragging the recipe package through every signature. Server-side
-// the orch-config layer is built by bakeOrchConfig in the build
-// server's recipes.go; the client uploads these as blobs.
+// OrchArgs mirrors recipe.Orchestrator. The single URL is the
+// gateway endpoint; the build server handles trust material via
+// its own local trust volume (recipe carries no PEMs).
 type OrchArgs struct {
-	StepCARoot   string
-	AttestCARoot   string
-	ClientCARoot string
-	CAURL        string
-	AttestCAURL  string
+	URL string
 }
 
-// hasAll returns true when every required field is populated. The
-// orch-config layer is only built when this is true; otherwise the
-// VM falls back to the Slice 1 path (manually-delivered certs).
-func (o OrchArgs) hasAll() bool {
-	return o.StepCARoot != "" && o.AttestCARoot != "" &&
-		o.ClientCARoot != "" && o.CAURL != "" && o.AttestCAURL != ""
+// hasURL reports whether the orchestrator URL was provided in the
+// recipe. When false, the orch-config layer is not built.
+func (o OrchArgs) hasURL() bool {
+	return o.URL != ""
 }
 
 

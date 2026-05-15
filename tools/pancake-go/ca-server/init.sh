@@ -115,6 +115,16 @@ TPL
     echo "[pancake-ca] CA home: $CA_HOME (volume-mount me to persist!)"
 fi
 
+# Drop a copy of the root cert into the shared pancake-trust volume
+# (when mounted) so pancake-build-server can read it without HTTPS
+# fetch / operator extraction. Idempotent — re-runs every container
+# start so a wiped trust volume gets repopulated even on a CA that
+# is already initialized.
+if [ -d /pancake-trust ]; then
+    install -m 0644 "$CA_HOME/certs/root_ca.crt" /pancake-trust/trust-root.crt
+    echo "[pancake-ca] published trust-root.crt to /pancake-trust"
+fi
+
 # Hand off to step-ca. The container already runs as `step` (set
 # in Dockerfile), so no su / sudo dance.
 exec step-ca --password-file="$CA_HOME/secrets/password" "$CA_HOME/config/ca.json"

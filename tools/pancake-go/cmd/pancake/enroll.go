@@ -57,13 +57,15 @@ const (
 	defaultOrchConfig = "/etc/pancake/orch/config.json"
 )
 
-// orchConfig mirrors the JSON written by packOrchConfigLayer in
-// bootstrap.go. All paths are absolute paths inside the running VM.
+// orchConfig mirrors the JSON written by bakeOrchConfig server-side.
+// All paths are absolute paths inside the running VM. The single
+// TrustRoot anchors every TLS connection enroll makes (ACME +
+// attest-ca both go through the same gateway).
 type orchConfig struct {
+	URL          string `json:"url"`
 	CAURL        string `json:"ca_url"`
 	AttestCAURL  string `json:"attest_ca_url"`
-	StepCARoot   string `json:"step_ca_root"`
-	AttestCARoot   string `json:"attest_ca_root"`
+	TrustRoot    string `json:"trust_root"`
 	ClientCARoot string `json:"client_ca_root"`
 }
 
@@ -132,22 +134,24 @@ func cmdEnroll(_ *kit.Kit, args []string) int {
 
 	// Layer-baked defaults. When the JSON exists, use it as the
 	// fallback for the four orch fields; explicit flags still win.
+	// CAURL + AttestCAURL are pre-expanded paths against the single
+	// gateway URL; both anchor at TrustRoot.
 	if cfg, err := loadOrchConfig(*orchConfigPath); err == nil {
 		if *caURL == "" {
 			*caURL = cfg.CAURL
 		}
 		if *caRoot == "" {
-			*caRoot = cfg.StepCARoot
+			*caRoot = cfg.TrustRoot
 		}
 		if *attestCAURL == "" {
 			*attestCAURL = cfg.AttestCAURL
 		}
 		if *attestCARoot == "" {
-			*attestCARoot = cfg.AttestCARoot
+			*attestCARoot = cfg.TrustRoot
 		}
 		fmt.Fprintf(os.Stderr,
-			"[enroll] orch config loaded from %s (ca=%s attest=%s)\n",
-			*orchConfigPath, cfg.CAURL, cfg.AttestCAURL)
+			"[enroll] orch config loaded from %s (gateway=%s)\n",
+			*orchConfigPath, cfg.URL)
 	}
 
 	// (a) EK export — always runs.
