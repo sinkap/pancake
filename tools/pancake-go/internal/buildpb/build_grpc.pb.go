@@ -55,7 +55,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v3.21.12
-// source: internal/buildpb/build.proto
+// source: build.proto
 
 package buildpb
 
@@ -78,6 +78,7 @@ const (
 	PancakeBuilder_GetLayer_FullMethodName        = "/pancake.build.v1.PancakeBuilder/GetLayer"
 	PancakeBuilder_UploadBlob_FullMethodName      = "/pancake.build.v1.PancakeBuilder/UploadBlob"
 	PancakeBuilder_ListLayers_FullMethodName      = "/pancake.build.v1.PancakeBuilder/ListLayers"
+	PancakeBuilder_BuildImage_FullMethodName      = "/pancake.build.v1.PancakeBuilder/BuildImage"
 )
 
 // PancakeBuilderClient is the client API for PancakeBuilder service.
@@ -112,6 +113,14 @@ type PancakeBuilderClient interface {
 	// ListLayers enumerates the cache. Optional name filter. No
 	// pagination yet — caches stay in the low thousands.
 	ListLayers(ctx context.Context, in *ListLayersRequest, opts ...grpc.CallOption) (*ListLayersResponse, error)
+	// BuildImage is the operator-facing one-shot RPC: take a recipe
+	// (packages + already-uploaded blobs + assembly knobs), build all
+	// referenced layers (calling BuildGeneration internally), pack
+	// the disk image + initramfs + UKI + EFI disk, sign via
+	// pancake-sign (when the server has --sign-addr set), and stream
+	// the resulting artifacts back. Replaces the client-side
+	// assembly that used to live in cmd/pancake/bootstrap_builder.go.
+	BuildImage(ctx context.Context, in *BuildImageRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildImageChunk], error)
 }
 
 type pancakeBuilderClient struct {
@@ -194,6 +203,25 @@ func (c *pancakeBuilderClient) ListLayers(ctx context.Context, in *ListLayersReq
 	return out, nil
 }
 
+func (c *pancakeBuilderClient) BuildImage(ctx context.Context, in *BuildImageRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildImageChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &PancakeBuilder_ServiceDesc.Streams[2], PancakeBuilder_BuildImage_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[BuildImageRequest, BuildImageChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PancakeBuilder_BuildImageClient = grpc.ServerStreamingClient[BuildImageChunk]
+
 // PancakeBuilderServer is the server API for PancakeBuilder service.
 // All implementations must embed UnimplementedPancakeBuilderServer
 // for forward compatibility.
@@ -226,6 +254,14 @@ type PancakeBuilderServer interface {
 	// ListLayers enumerates the cache. Optional name filter. No
 	// pagination yet — caches stay in the low thousands.
 	ListLayers(context.Context, *ListLayersRequest) (*ListLayersResponse, error)
+	// BuildImage is the operator-facing one-shot RPC: take a recipe
+	// (packages + already-uploaded blobs + assembly knobs), build all
+	// referenced layers (calling BuildGeneration internally), pack
+	// the disk image + initramfs + UKI + EFI disk, sign via
+	// pancake-sign (when the server has --sign-addr set), and stream
+	// the resulting artifacts back. Replaces the client-side
+	// assembly that used to live in cmd/pancake/bootstrap_builder.go.
+	BuildImage(*BuildImageRequest, grpc.ServerStreamingServer[BuildImageChunk]) error
 	mustEmbedUnimplementedPancakeBuilderServer()
 }
 
@@ -253,6 +289,9 @@ func (UnimplementedPancakeBuilderServer) UploadBlob(grpc.ClientStreamingServer[B
 }
 func (UnimplementedPancakeBuilderServer) ListLayers(context.Context, *ListLayersRequest) (*ListLayersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListLayers not implemented")
+}
+func (UnimplementedPancakeBuilderServer) BuildImage(*BuildImageRequest, grpc.ServerStreamingServer[BuildImageChunk]) error {
+	return status.Error(codes.Unimplemented, "method BuildImage not implemented")
 }
 func (UnimplementedPancakeBuilderServer) mustEmbedUnimplementedPancakeBuilderServer() {}
 func (UnimplementedPancakeBuilderServer) testEmbeddedByValue()                        {}
@@ -365,6 +404,17 @@ func _PancakeBuilder_ListLayers_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PancakeBuilder_BuildImage_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(BuildImageRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(PancakeBuilderServer).BuildImage(m, &grpc.GenericServerStream[BuildImageRequest, BuildImageChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PancakeBuilder_BuildImageServer = grpc.ServerStreamingServer[BuildImageChunk]
+
 // PancakeBuilder_ServiceDesc is the grpc.ServiceDesc for PancakeBuilder service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -400,6 +450,11 @@ var PancakeBuilder_ServiceDesc = grpc.ServiceDesc{
 			Handler:       _PancakeBuilder_UploadBlob_Handler,
 			ClientStreams: true,
 		},
+		{
+			StreamName:    "BuildImage",
+			Handler:       _PancakeBuilder_BuildImage_Handler,
+			ServerStreams: true,
+		},
 	},
-	Metadata: "internal/buildpb/build.proto",
+	Metadata: "build.proto",
 }

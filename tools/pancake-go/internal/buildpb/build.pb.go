@@ -55,7 +55,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v3.21.12
-// source: internal/buildpb/build.proto
+// source: build.proto
 
 package buildpb
 
@@ -114,11 +114,11 @@ func (x LayerPart) String() string {
 }
 
 func (LayerPart) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_buildpb_build_proto_enumTypes[0].Descriptor()
+	return file_build_proto_enumTypes[0].Descriptor()
 }
 
 func (LayerPart) Type() protoreflect.EnumType {
-	return &file_internal_buildpb_build_proto_enumTypes[0]
+	return &file_build_proto_enumTypes[0]
 }
 
 func (x LayerPart) Number() protoreflect.EnumNumber {
@@ -127,7 +127,71 @@ func (x LayerPart) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use LayerPart.Descriptor instead.
 func (LayerPart) EnumDescriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{0}
+	return file_build_proto_rawDescGZIP(), []int{0}
+}
+
+type BuildImageChunk_Artifact int32
+
+const (
+	BuildImageChunk_ARTIFACT_UNSPECIFIED BuildImageChunk_Artifact = 0
+	BuildImageChunk_ARTIFACT_DISK_IMAGE  BuildImageChunk_Artifact = 1 // ext4 with kit (sparse-aware)
+	BuildImageChunk_ARTIFACT_INITRAMFS   BuildImageChunk_Artifact = 2 // .cpio.gz
+	BuildImageChunk_ARTIFACT_BZIMAGE     BuildImageChunk_Artifact = 3 // raw bzImage copy
+	BuildImageChunk_ARTIFACT_UKI         BuildImageChunk_Artifact = 4 // signed PE binary
+	BuildImageChunk_ARTIFACT_EFI_DISK    BuildImageChunk_Artifact = 5 // GPT + ESP + rootfs (sparse-aware)
+	BuildImageChunk_ARTIFACT_MANIFEST    BuildImageChunk_Artifact = 6 // signed generation manifest
+	BuildImageChunk_ARTIFACT_PUBKEY      BuildImageChunk_Artifact = 7 // signing cert pubkey (PEM)
+)
+
+// Enum value maps for BuildImageChunk_Artifact.
+var (
+	BuildImageChunk_Artifact_name = map[int32]string{
+		0: "ARTIFACT_UNSPECIFIED",
+		1: "ARTIFACT_DISK_IMAGE",
+		2: "ARTIFACT_INITRAMFS",
+		3: "ARTIFACT_BZIMAGE",
+		4: "ARTIFACT_UKI",
+		5: "ARTIFACT_EFI_DISK",
+		6: "ARTIFACT_MANIFEST",
+		7: "ARTIFACT_PUBKEY",
+	}
+	BuildImageChunk_Artifact_value = map[string]int32{
+		"ARTIFACT_UNSPECIFIED": 0,
+		"ARTIFACT_DISK_IMAGE":  1,
+		"ARTIFACT_INITRAMFS":   2,
+		"ARTIFACT_BZIMAGE":     3,
+		"ARTIFACT_UKI":         4,
+		"ARTIFACT_EFI_DISK":    5,
+		"ARTIFACT_MANIFEST":    6,
+		"ARTIFACT_PUBKEY":      7,
+	}
+)
+
+func (x BuildImageChunk_Artifact) Enum() *BuildImageChunk_Artifact {
+	p := new(BuildImageChunk_Artifact)
+	*p = x
+	return p
+}
+
+func (x BuildImageChunk_Artifact) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BuildImageChunk_Artifact) Descriptor() protoreflect.EnumDescriptor {
+	return file_build_proto_enumTypes[1].Descriptor()
+}
+
+func (BuildImageChunk_Artifact) Type() protoreflect.EnumType {
+	return &file_build_proto_enumTypes[1]
+}
+
+func (x BuildImageChunk_Artifact) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BuildImageChunk_Artifact.Descriptor instead.
+func (BuildImageChunk_Artifact) EnumDescriptor() ([]byte, []int) {
+	return file_build_proto_rawDescGZIP(), []int{15, 0}
 }
 
 type Package struct {
@@ -143,7 +207,7 @@ type Package struct {
 
 func (x *Package) Reset() {
 	*x = Package{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[0]
+	mi := &file_build_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -155,7 +219,7 @@ func (x *Package) String() string {
 func (*Package) ProtoMessage() {}
 
 func (x *Package) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[0]
+	mi := &file_build_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -168,7 +232,7 @@ func (x *Package) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Package.ProtoReflect.Descriptor instead.
 func (*Package) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{0}
+	return file_build_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Package) GetManager() isPackage_Manager {
@@ -227,7 +291,7 @@ type APT struct {
 
 func (x *APT) Reset() {
 	*x = APT{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[1]
+	mi := &file_build_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -239,7 +303,7 @@ func (x *APT) String() string {
 func (*APT) ProtoMessage() {}
 
 func (x *APT) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[1]
+	mi := &file_build_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -252,7 +316,7 @@ func (x *APT) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APT.ProtoReflect.Descriptor instead.
 func (*APT) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{1}
+	return file_build_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *APT) GetName() string {
@@ -373,7 +437,7 @@ type PancakeInternal struct {
 
 func (x *PancakeInternal) Reset() {
 	*x = PancakeInternal{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[2]
+	mi := &file_build_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -385,7 +449,7 @@ func (x *PancakeInternal) String() string {
 func (*PancakeInternal) ProtoMessage() {}
 
 func (x *PancakeInternal) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[2]
+	mi := &file_build_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -398,7 +462,7 @@ func (x *PancakeInternal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PancakeInternal.ProtoReflect.Descriptor instead.
 func (*PancakeInternal) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{2}
+	return file_build_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *PancakeInternal) GetRecipe() string {
@@ -458,7 +522,7 @@ type LayerHandle struct {
 
 func (x *LayerHandle) Reset() {
 	*x = LayerHandle{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[3]
+	mi := &file_build_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -470,7 +534,7 @@ func (x *LayerHandle) String() string {
 func (*LayerHandle) ProtoMessage() {}
 
 func (x *LayerHandle) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[3]
+	mi := &file_build_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -483,7 +547,7 @@ func (x *LayerHandle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LayerHandle.ProtoReflect.Descriptor instead.
 func (*LayerHandle) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{3}
+	return file_build_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *LayerHandle) GetRoothash() string {
@@ -570,7 +634,7 @@ type BuildLayerRequest struct {
 
 func (x *BuildLayerRequest) Reset() {
 	*x = BuildLayerRequest{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[4]
+	mi := &file_build_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -582,7 +646,7 @@ func (x *BuildLayerRequest) String() string {
 func (*BuildLayerRequest) ProtoMessage() {}
 
 func (x *BuildLayerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[4]
+	mi := &file_build_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -595,7 +659,7 @@ func (x *BuildLayerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildLayerRequest.ProtoReflect.Descriptor instead.
 func (*BuildLayerRequest) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{4}
+	return file_build_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *BuildLayerRequest) GetPackage() *Package {
@@ -621,7 +685,7 @@ type LookupLayerRequest struct {
 
 func (x *LookupLayerRequest) Reset() {
 	*x = LookupLayerRequest{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[5]
+	mi := &file_build_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -633,7 +697,7 @@ func (x *LookupLayerRequest) String() string {
 func (*LookupLayerRequest) ProtoMessage() {}
 
 func (x *LookupLayerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[5]
+	mi := &file_build_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -646,7 +710,7 @@ func (x *LookupLayerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LookupLayerRequest.ProtoReflect.Descriptor instead.
 func (*LookupLayerRequest) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{5}
+	return file_build_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *LookupLayerRequest) GetPackage() *Package {
@@ -672,7 +736,7 @@ type BuildGenerationRequest struct {
 
 func (x *BuildGenerationRequest) Reset() {
 	*x = BuildGenerationRequest{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[6]
+	mi := &file_build_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -684,7 +748,7 @@ func (x *BuildGenerationRequest) String() string {
 func (*BuildGenerationRequest) ProtoMessage() {}
 
 func (x *BuildGenerationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[6]
+	mi := &file_build_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -697,7 +761,7 @@ func (x *BuildGenerationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildGenerationRequest.ProtoReflect.Descriptor instead.
 func (*BuildGenerationRequest) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{6}
+	return file_build_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *BuildGenerationRequest) GetPackages() []*Package {
@@ -756,7 +820,7 @@ type GenerationManifest struct {
 
 func (x *GenerationManifest) Reset() {
 	*x = GenerationManifest{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[7]
+	mi := &file_build_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -768,7 +832,7 @@ func (x *GenerationManifest) String() string {
 func (*GenerationManifest) ProtoMessage() {}
 
 func (x *GenerationManifest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[7]
+	mi := &file_build_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -781,7 +845,7 @@ func (x *GenerationManifest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerationManifest.ProtoReflect.Descriptor instead.
 func (*GenerationManifest) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{7}
+	return file_build_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GenerationManifest) GetManifestToml() []byte {
@@ -848,7 +912,7 @@ type GetLayerRequest struct {
 
 func (x *GetLayerRequest) Reset() {
 	*x = GetLayerRequest{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[8]
+	mi := &file_build_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -860,7 +924,7 @@ func (x *GetLayerRequest) String() string {
 func (*GetLayerRequest) ProtoMessage() {}
 
 func (x *GetLayerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[8]
+	mi := &file_build_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -873,7 +937,7 @@ func (x *GetLayerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLayerRequest.ProtoReflect.Descriptor instead.
 func (*GetLayerRequest) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{8}
+	return file_build_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GetLayerRequest) GetRoothash() string {
@@ -923,7 +987,7 @@ type LayerChunk struct {
 
 func (x *LayerChunk) Reset() {
 	*x = LayerChunk{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[9]
+	mi := &file_build_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -935,7 +999,7 @@ func (x *LayerChunk) String() string {
 func (*LayerChunk) ProtoMessage() {}
 
 func (x *LayerChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[9]
+	mi := &file_build_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -948,7 +1012,7 @@ func (x *LayerChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LayerChunk.ProtoReflect.Descriptor instead.
 func (*LayerChunk) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{9}
+	return file_build_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *LayerChunk) GetPart() LayerPart {
@@ -988,7 +1052,7 @@ type ListLayersRequest struct {
 
 func (x *ListLayersRequest) Reset() {
 	*x = ListLayersRequest{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[10]
+	mi := &file_build_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1000,7 +1064,7 @@ func (x *ListLayersRequest) String() string {
 func (*ListLayersRequest) ProtoMessage() {}
 
 func (x *ListLayersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[10]
+	mi := &file_build_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1013,7 +1077,7 @@ func (x *ListLayersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListLayersRequest.ProtoReflect.Descriptor instead.
 func (*ListLayersRequest) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{10}
+	return file_build_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListLayersRequest) GetNamePrefix() string {
@@ -1032,7 +1096,7 @@ type ListLayersResponse struct {
 
 func (x *ListLayersResponse) Reset() {
 	*x = ListLayersResponse{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[11]
+	mi := &file_build_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1044,7 +1108,7 @@ func (x *ListLayersResponse) String() string {
 func (*ListLayersResponse) ProtoMessage() {}
 
 func (x *ListLayersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[11]
+	mi := &file_build_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1057,7 +1121,7 @@ func (x *ListLayersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListLayersResponse.ProtoReflect.Descriptor instead.
 func (*ListLayersResponse) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{11}
+	return file_build_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListLayersResponse) GetLayer() []*LayerHandle {
@@ -1077,7 +1141,7 @@ type BlobChunk struct {
 
 func (x *BlobChunk) Reset() {
 	*x = BlobChunk{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[12]
+	mi := &file_build_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1089,7 +1153,7 @@ func (x *BlobChunk) String() string {
 func (*BlobChunk) ProtoMessage() {}
 
 func (x *BlobChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[12]
+	mi := &file_build_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1102,7 +1166,7 @@ func (x *BlobChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BlobChunk.ProtoReflect.Descriptor instead.
 func (*BlobChunk) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{12}
+	return file_build_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *BlobChunk) GetData() []byte {
@@ -1129,7 +1193,7 @@ type BlobReference struct {
 
 func (x *BlobReference) Reset() {
 	*x = BlobReference{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[13]
+	mi := &file_build_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1141,7 +1205,7 @@ func (x *BlobReference) String() string {
 func (*BlobReference) ProtoMessage() {}
 
 func (x *BlobReference) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[13]
+	mi := &file_build_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1154,7 +1218,7 @@ func (x *BlobReference) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BlobReference.ProtoReflect.Descriptor instead.
 func (*BlobReference) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{13}
+	return file_build_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *BlobReference) GetSha256() string {
@@ -1171,6 +1235,239 @@ func (x *BlobReference) GetSize() int64 {
 	return 0
 }
 
+// BuildImageRequest is the union of inputs `pancake bootstrap` used
+// to feed into its local assembly chain. The server runs the same
+// pipeline (BuildGeneration → pack disk → build initramfs → build
+// UKI → pack EFI disk → sign), then streams the artifacts back.
+//
+// All blob inputs (SSH key, custom kernel, modules tarball, three
+// orchestrator trust roots, two URLs, hostname) are referenced by
+// sha256 from a prior UploadBlob call — exactly like the
+// PancakeInternal.blobs map. Tiny string inputs (hostname, URLs)
+// are encoded as raw-bytes blobs.
+type BuildImageRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Same overlay-ordered package set BuildGeneration takes.
+	Packages []*Package `protobuf:"bytes,1,rep,name=packages,proto3" json:"packages,omitempty"`
+	// Assembly knobs (formerly CLI flags on `pancake bootstrap`).
+	Cmdline     string `protobuf:"bytes,2,opt,name=cmdline,proto3" json:"cmdline,omitempty"`                            // baked into UKI for --want_uki
+	KernelUname string `protobuf:"bytes,3,opt,name=kernel_uname,json=kernelUname,proto3" json:"kernel_uname,omitempty"` // for UKI's --uname
+	// What artifacts to return. Empty = none of them; useful for
+	// "warm the cache" calls.
+	WantDiskImage bool `protobuf:"varint,4,opt,name=want_disk_image,json=wantDiskImage,proto3" json:"want_disk_image,omitempty"`
+	WantInitramfs bool `protobuf:"varint,5,opt,name=want_initramfs,json=wantInitramfs,proto3" json:"want_initramfs,omitempty"`
+	WantBzimage   bool `protobuf:"varint,6,opt,name=want_bzimage,json=wantBzimage,proto3" json:"want_bzimage,omitempty"`
+	WantUki       bool `protobuf:"varint,7,opt,name=want_uki,json=wantUki,proto3" json:"want_uki,omitempty"`
+	WantEfiDisk   bool `protobuf:"varint,8,opt,name=want_efi_disk,json=wantEfiDisk,proto3" json:"want_efi_disk,omitempty"`
+	WantManifest  bool `protobuf:"varint,9,opt,name=want_manifest,json=wantManifest,proto3" json:"want_manifest,omitempty"` // signed generation manifest
+	WantPubkey    bool `protobuf:"varint,10,opt,name=want_pubkey,json=wantPubkey,proto3" json:"want_pubkey,omitempty"`      // signing cert pubkey for the operator
+	// Forwarded to pancake-sign when present.
+	SigningKeyId string `protobuf:"bytes,11,opt,name=signing_key_id,json=signingKeyId,proto3" json:"signing_key_id,omitempty"`
+	// Generation lineage. Same semantics as BuildGenerationRequest.
+	Parent        int32  `protobuf:"varint,12,opt,name=parent,proto3" json:"parent,omitempty"`
+	Counter       int32  `protobuf:"varint,13,opt,name=counter,proto3" json:"counter,omitempty"`
+	Description   string `protobuf:"bytes,14,opt,name=description,proto3" json:"description,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildImageRequest) Reset() {
+	*x = BuildImageRequest{}
+	mi := &file_build_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildImageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildImageRequest) ProtoMessage() {}
+
+func (x *BuildImageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_build_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildImageRequest.ProtoReflect.Descriptor instead.
+func (*BuildImageRequest) Descriptor() ([]byte, []int) {
+	return file_build_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *BuildImageRequest) GetPackages() []*Package {
+	if x != nil {
+		return x.Packages
+	}
+	return nil
+}
+
+func (x *BuildImageRequest) GetCmdline() string {
+	if x != nil {
+		return x.Cmdline
+	}
+	return ""
+}
+
+func (x *BuildImageRequest) GetKernelUname() string {
+	if x != nil {
+		return x.KernelUname
+	}
+	return ""
+}
+
+func (x *BuildImageRequest) GetWantDiskImage() bool {
+	if x != nil {
+		return x.WantDiskImage
+	}
+	return false
+}
+
+func (x *BuildImageRequest) GetWantInitramfs() bool {
+	if x != nil {
+		return x.WantInitramfs
+	}
+	return false
+}
+
+func (x *BuildImageRequest) GetWantBzimage() bool {
+	if x != nil {
+		return x.WantBzimage
+	}
+	return false
+}
+
+func (x *BuildImageRequest) GetWantUki() bool {
+	if x != nil {
+		return x.WantUki
+	}
+	return false
+}
+
+func (x *BuildImageRequest) GetWantEfiDisk() bool {
+	if x != nil {
+		return x.WantEfiDisk
+	}
+	return false
+}
+
+func (x *BuildImageRequest) GetWantManifest() bool {
+	if x != nil {
+		return x.WantManifest
+	}
+	return false
+}
+
+func (x *BuildImageRequest) GetWantPubkey() bool {
+	if x != nil {
+		return x.WantPubkey
+	}
+	return false
+}
+
+func (x *BuildImageRequest) GetSigningKeyId() string {
+	if x != nil {
+		return x.SigningKeyId
+	}
+	return ""
+}
+
+func (x *BuildImageRequest) GetParent() int32 {
+	if x != nil {
+		return x.Parent
+	}
+	return 0
+}
+
+func (x *BuildImageRequest) GetCounter() int32 {
+	if x != nil {
+		return x.Counter
+	}
+	return 0
+}
+
+func (x *BuildImageRequest) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+type BuildImageChunk struct {
+	state    protoimpl.MessageState   `protogen:"open.v1"`
+	Artifact BuildImageChunk_Artifact `protobuf:"varint,1,opt,name=artifact,proto3,enum=pancake.build.v1.BuildImageChunk_Artifact" json:"artifact,omitempty"`
+	Data     []byte                   `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	Offset   int64                    `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"` // for sparse files (ARTIFACT_DISK_IMAGE,
+	// ARTIFACT_EFI_DISK)
+	Last          bool `protobuf:"varint,4,opt,name=last,proto3" json:"last,omitempty"` // last chunk for this artifact
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildImageChunk) Reset() {
+	*x = BuildImageChunk{}
+	mi := &file_build_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildImageChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildImageChunk) ProtoMessage() {}
+
+func (x *BuildImageChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_build_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildImageChunk.ProtoReflect.Descriptor instead.
+func (*BuildImageChunk) Descriptor() ([]byte, []int) {
+	return file_build_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *BuildImageChunk) GetArtifact() BuildImageChunk_Artifact {
+	if x != nil {
+		return x.Artifact
+	}
+	return BuildImageChunk_ARTIFACT_UNSPECIFIED
+}
+
+func (x *BuildImageChunk) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *BuildImageChunk) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *BuildImageChunk) GetLast() bool {
+	if x != nil {
+		return x.Last
+	}
+	return false
+}
+
 type Catalog struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Recipe        []*Recipe              `protobuf:"bytes,1,rep,name=recipe,proto3" json:"recipe,omitempty"`
@@ -1180,7 +1477,7 @@ type Catalog struct {
 
 func (x *Catalog) Reset() {
 	*x = Catalog{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[14]
+	mi := &file_build_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1192,7 +1489,7 @@ func (x *Catalog) String() string {
 func (*Catalog) ProtoMessage() {}
 
 func (x *Catalog) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[14]
+	mi := &file_build_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1205,7 +1502,7 @@ func (x *Catalog) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Catalog.ProtoReflect.Descriptor instead.
 func (*Catalog) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{14}
+	return file_build_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *Catalog) GetRecipe() []*Recipe {
@@ -1236,7 +1533,7 @@ type Recipe struct {
 
 func (x *Recipe) Reset() {
 	*x = Recipe{}
-	mi := &file_internal_buildpb_build_proto_msgTypes[15]
+	mi := &file_build_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1248,7 +1545,7 @@ func (x *Recipe) String() string {
 func (*Recipe) ProtoMessage() {}
 
 func (x *Recipe) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_buildpb_build_proto_msgTypes[15]
+	mi := &file_build_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1261,7 +1558,7 @@ func (x *Recipe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Recipe.ProtoReflect.Descriptor instead.
 func (*Recipe) Descriptor() ([]byte, []int) {
-	return file_internal_buildpb_build_proto_rawDescGZIP(), []int{15}
+	return file_build_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Recipe) GetName() string {
@@ -1306,11 +1603,11 @@ func (x *Recipe) GetOptionalBlobs() []string {
 	return nil
 }
 
-var File_internal_buildpb_build_proto protoreflect.FileDescriptor
+var File_build_proto protoreflect.FileDescriptor
 
-const file_internal_buildpb_build_proto_rawDesc = "" +
+const file_build_proto_rawDesc = "" +
 	"\n" +
-	"\x1cinternal/buildpb/build.proto\x12\x10pancake.build.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x80\x01\n" +
+	"\vbuild.proto\x12\x10pancake.build.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x80\x01\n" +
 	"\aPackage\x12)\n" +
 	"\x03apt\x18\x01 \x01(\v2\x15.pancake.build.v1.APTH\x00R\x03apt\x12?\n" +
 	"\binternal\x18\x02 \x01(\v2!.pancake.build.v1.PancakeInternalH\x00R\binternalB\t\n" +
@@ -1382,7 +1679,38 @@ const file_internal_buildpb_build_proto_rawDesc = "" +
 	"\x04last\x18\x02 \x01(\bR\x04last\";\n" +
 	"\rBlobReference\x12\x16\n" +
 	"\x06sha256\x18\x01 \x01(\tR\x06sha256\x12\x12\n" +
-	"\x04size\x18\x02 \x01(\x03R\x04size\";\n" +
+	"\x04size\x18\x02 \x01(\x03R\x04size\"\xf8\x03\n" +
+	"\x11BuildImageRequest\x125\n" +
+	"\bpackages\x18\x01 \x03(\v2\x19.pancake.build.v1.PackageR\bpackages\x12\x18\n" +
+	"\acmdline\x18\x02 \x01(\tR\acmdline\x12!\n" +
+	"\fkernel_uname\x18\x03 \x01(\tR\vkernelUname\x12&\n" +
+	"\x0fwant_disk_image\x18\x04 \x01(\bR\rwantDiskImage\x12%\n" +
+	"\x0ewant_initramfs\x18\x05 \x01(\bR\rwantInitramfs\x12!\n" +
+	"\fwant_bzimage\x18\x06 \x01(\bR\vwantBzimage\x12\x19\n" +
+	"\bwant_uki\x18\a \x01(\bR\awantUki\x12\"\n" +
+	"\rwant_efi_disk\x18\b \x01(\bR\vwantEfiDisk\x12#\n" +
+	"\rwant_manifest\x18\t \x01(\bR\fwantManifest\x12\x1f\n" +
+	"\vwant_pubkey\x18\n" +
+	" \x01(\bR\n" +
+	"wantPubkey\x12$\n" +
+	"\x0esigning_key_id\x18\v \x01(\tR\fsigningKeyId\x12\x16\n" +
+	"\x06parent\x18\f \x01(\x05R\x06parent\x12\x18\n" +
+	"\acounter\x18\r \x01(\x05R\acounter\x12 \n" +
+	"\vdescription\x18\x0e \x01(\tR\vdescription\"\xdc\x02\n" +
+	"\x0fBuildImageChunk\x12F\n" +
+	"\bartifact\x18\x01 \x01(\x0e2*.pancake.build.v1.BuildImageChunk.ArtifactR\bartifact\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\x12\x16\n" +
+	"\x06offset\x18\x03 \x01(\x03R\x06offset\x12\x12\n" +
+	"\x04last\x18\x04 \x01(\bR\x04last\"\xc0\x01\n" +
+	"\bArtifact\x12\x18\n" +
+	"\x14ARTIFACT_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13ARTIFACT_DISK_IMAGE\x10\x01\x12\x16\n" +
+	"\x12ARTIFACT_INITRAMFS\x10\x02\x12\x14\n" +
+	"\x10ARTIFACT_BZIMAGE\x10\x03\x12\x10\n" +
+	"\fARTIFACT_UKI\x10\x04\x12\x15\n" +
+	"\x11ARTIFACT_EFI_DISK\x10\x05\x12\x15\n" +
+	"\x11ARTIFACT_MANIFEST\x10\x06\x12\x13\n" +
+	"\x0fARTIFACT_PUBKEY\x10\a\";\n" +
 	"\aCatalog\x120\n" +
 	"\x06recipe\x18\x01 \x03(\v2\x18.pancake.build.v1.RecipeR\x06recipe\"\xe4\x01\n" +
 	"\x06Recipe\x12\x12\n" +
@@ -1397,7 +1725,7 @@ const file_internal_buildpb_build_proto_rawDesc = "" +
 	"\x10LAYER_PART_IMAGE\x10\x01\x12\x13\n" +
 	"\x0fLAYER_PART_HASH\x10\x02\x12\x17\n" +
 	"\x13LAYER_PART_MANIFEST\x10\x03\x12\x17\n" +
-	"\x13LAYER_PART_ROOTHASH\x10\x042\x8f\x04\n" +
+	"\x13LAYER_PART_ROOTHASH\x10\x042\xe7\x04\n" +
 	"\x0ePancakeBuilder\x12P\n" +
 	"\n" +
 	"BuildLayer\x12#.pancake.build.v1.BuildLayerRequest\x1a\x1d.pancake.build.v1.LayerHandle\x12R\n" +
@@ -1407,82 +1735,91 @@ const file_internal_buildpb_build_proto_rawDesc = "" +
 	"\n" +
 	"UploadBlob\x12\x1b.pancake.build.v1.BlobChunk\x1a\x1f.pancake.build.v1.BlobReference(\x01\x12W\n" +
 	"\n" +
-	"ListLayers\x12#.pancake.build.v1.ListLayersRequest\x1a$.pancake.build.v1.ListLayersResponseB=Z;github.com/sinkap/pancake/tools/pancake-go/internal/buildpbb\x06proto3"
+	"ListLayers\x12#.pancake.build.v1.ListLayersRequest\x1a$.pancake.build.v1.ListLayersResponse\x12V\n" +
+	"\n" +
+	"BuildImage\x12#.pancake.build.v1.BuildImageRequest\x1a!.pancake.build.v1.BuildImageChunk0\x01B=Z;github.com/sinkap/pancake/tools/pancake-go/internal/buildpbb\x06proto3"
 
 var (
-	file_internal_buildpb_build_proto_rawDescOnce sync.Once
-	file_internal_buildpb_build_proto_rawDescData []byte
+	file_build_proto_rawDescOnce sync.Once
+	file_build_proto_rawDescData []byte
 )
 
-func file_internal_buildpb_build_proto_rawDescGZIP() []byte {
-	file_internal_buildpb_build_proto_rawDescOnce.Do(func() {
-		file_internal_buildpb_build_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_internal_buildpb_build_proto_rawDesc), len(file_internal_buildpb_build_proto_rawDesc)))
+func file_build_proto_rawDescGZIP() []byte {
+	file_build_proto_rawDescOnce.Do(func() {
+		file_build_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_build_proto_rawDesc), len(file_build_proto_rawDesc)))
 	})
-	return file_internal_buildpb_build_proto_rawDescData
+	return file_build_proto_rawDescData
 }
 
-var file_internal_buildpb_build_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_internal_buildpb_build_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
-var file_internal_buildpb_build_proto_goTypes = []any{
+var file_build_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_build_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_build_proto_goTypes = []any{
 	(LayerPart)(0),                 // 0: pancake.build.v1.LayerPart
-	(*Package)(nil),                // 1: pancake.build.v1.Package
-	(*APT)(nil),                    // 2: pancake.build.v1.APT
-	(*PancakeInternal)(nil),        // 3: pancake.build.v1.PancakeInternal
-	(*LayerHandle)(nil),            // 4: pancake.build.v1.LayerHandle
-	(*BuildLayerRequest)(nil),      // 5: pancake.build.v1.BuildLayerRequest
-	(*LookupLayerRequest)(nil),     // 6: pancake.build.v1.LookupLayerRequest
-	(*BuildGenerationRequest)(nil), // 7: pancake.build.v1.BuildGenerationRequest
-	(*GenerationManifest)(nil),     // 8: pancake.build.v1.GenerationManifest
-	(*GetLayerRequest)(nil),        // 9: pancake.build.v1.GetLayerRequest
-	(*LayerChunk)(nil),             // 10: pancake.build.v1.LayerChunk
-	(*ListLayersRequest)(nil),      // 11: pancake.build.v1.ListLayersRequest
-	(*ListLayersResponse)(nil),     // 12: pancake.build.v1.ListLayersResponse
-	(*BlobChunk)(nil),              // 13: pancake.build.v1.BlobChunk
-	(*BlobReference)(nil),          // 14: pancake.build.v1.BlobReference
-	(*Catalog)(nil),                // 15: pancake.build.v1.Catalog
-	(*Recipe)(nil),                 // 16: pancake.build.v1.Recipe
-	nil,                            // 17: pancake.build.v1.PancakeInternal.BlobsEntry
-	(*timestamppb.Timestamp)(nil),  // 18: google.protobuf.Timestamp
+	(BuildImageChunk_Artifact)(0),  // 1: pancake.build.v1.BuildImageChunk.Artifact
+	(*Package)(nil),                // 2: pancake.build.v1.Package
+	(*APT)(nil),                    // 3: pancake.build.v1.APT
+	(*PancakeInternal)(nil),        // 4: pancake.build.v1.PancakeInternal
+	(*LayerHandle)(nil),            // 5: pancake.build.v1.LayerHandle
+	(*BuildLayerRequest)(nil),      // 6: pancake.build.v1.BuildLayerRequest
+	(*LookupLayerRequest)(nil),     // 7: pancake.build.v1.LookupLayerRequest
+	(*BuildGenerationRequest)(nil), // 8: pancake.build.v1.BuildGenerationRequest
+	(*GenerationManifest)(nil),     // 9: pancake.build.v1.GenerationManifest
+	(*GetLayerRequest)(nil),        // 10: pancake.build.v1.GetLayerRequest
+	(*LayerChunk)(nil),             // 11: pancake.build.v1.LayerChunk
+	(*ListLayersRequest)(nil),      // 12: pancake.build.v1.ListLayersRequest
+	(*ListLayersResponse)(nil),     // 13: pancake.build.v1.ListLayersResponse
+	(*BlobChunk)(nil),              // 14: pancake.build.v1.BlobChunk
+	(*BlobReference)(nil),          // 15: pancake.build.v1.BlobReference
+	(*BuildImageRequest)(nil),      // 16: pancake.build.v1.BuildImageRequest
+	(*BuildImageChunk)(nil),        // 17: pancake.build.v1.BuildImageChunk
+	(*Catalog)(nil),                // 18: pancake.build.v1.Catalog
+	(*Recipe)(nil),                 // 19: pancake.build.v1.Recipe
+	nil,                            // 20: pancake.build.v1.PancakeInternal.BlobsEntry
+	(*timestamppb.Timestamp)(nil),  // 21: google.protobuf.Timestamp
 }
-var file_internal_buildpb_build_proto_depIdxs = []int32{
-	2,  // 0: pancake.build.v1.Package.apt:type_name -> pancake.build.v1.APT
-	3,  // 1: pancake.build.v1.Package.internal:type_name -> pancake.build.v1.PancakeInternal
-	2,  // 2: pancake.build.v1.PancakeInternal.packages:type_name -> pancake.build.v1.APT
-	17, // 3: pancake.build.v1.PancakeInternal.blobs:type_name -> pancake.build.v1.PancakeInternal.BlobsEntry
-	18, // 4: pancake.build.v1.LayerHandle.built_at:type_name -> google.protobuf.Timestamp
-	1,  // 5: pancake.build.v1.BuildLayerRequest.package:type_name -> pancake.build.v1.Package
-	1,  // 6: pancake.build.v1.LookupLayerRequest.package:type_name -> pancake.build.v1.Package
-	1,  // 7: pancake.build.v1.BuildGenerationRequest.packages:type_name -> pancake.build.v1.Package
-	4,  // 8: pancake.build.v1.GenerationManifest.layer:type_name -> pancake.build.v1.LayerHandle
+var file_build_proto_depIdxs = []int32{
+	3,  // 0: pancake.build.v1.Package.apt:type_name -> pancake.build.v1.APT
+	4,  // 1: pancake.build.v1.Package.internal:type_name -> pancake.build.v1.PancakeInternal
+	3,  // 2: pancake.build.v1.PancakeInternal.packages:type_name -> pancake.build.v1.APT
+	20, // 3: pancake.build.v1.PancakeInternal.blobs:type_name -> pancake.build.v1.PancakeInternal.BlobsEntry
+	21, // 4: pancake.build.v1.LayerHandle.built_at:type_name -> google.protobuf.Timestamp
+	2,  // 5: pancake.build.v1.BuildLayerRequest.package:type_name -> pancake.build.v1.Package
+	2,  // 6: pancake.build.v1.LookupLayerRequest.package:type_name -> pancake.build.v1.Package
+	2,  // 7: pancake.build.v1.BuildGenerationRequest.packages:type_name -> pancake.build.v1.Package
+	5,  // 8: pancake.build.v1.GenerationManifest.layer:type_name -> pancake.build.v1.LayerHandle
 	0,  // 9: pancake.build.v1.GetLayerRequest.want:type_name -> pancake.build.v1.LayerPart
 	0,  // 10: pancake.build.v1.LayerChunk.part:type_name -> pancake.build.v1.LayerPart
-	4,  // 11: pancake.build.v1.ListLayersResponse.layer:type_name -> pancake.build.v1.LayerHandle
-	16, // 12: pancake.build.v1.Catalog.recipe:type_name -> pancake.build.v1.Recipe
-	5,  // 13: pancake.build.v1.PancakeBuilder.BuildLayer:input_type -> pancake.build.v1.BuildLayerRequest
-	6,  // 14: pancake.build.v1.PancakeBuilder.LookupLayer:input_type -> pancake.build.v1.LookupLayerRequest
-	7,  // 15: pancake.build.v1.PancakeBuilder.BuildGeneration:input_type -> pancake.build.v1.BuildGenerationRequest
-	9,  // 16: pancake.build.v1.PancakeBuilder.GetLayer:input_type -> pancake.build.v1.GetLayerRequest
-	13, // 17: pancake.build.v1.PancakeBuilder.UploadBlob:input_type -> pancake.build.v1.BlobChunk
-	11, // 18: pancake.build.v1.PancakeBuilder.ListLayers:input_type -> pancake.build.v1.ListLayersRequest
-	4,  // 19: pancake.build.v1.PancakeBuilder.BuildLayer:output_type -> pancake.build.v1.LayerHandle
-	4,  // 20: pancake.build.v1.PancakeBuilder.LookupLayer:output_type -> pancake.build.v1.LayerHandle
-	8,  // 21: pancake.build.v1.PancakeBuilder.BuildGeneration:output_type -> pancake.build.v1.GenerationManifest
-	10, // 22: pancake.build.v1.PancakeBuilder.GetLayer:output_type -> pancake.build.v1.LayerChunk
-	14, // 23: pancake.build.v1.PancakeBuilder.UploadBlob:output_type -> pancake.build.v1.BlobReference
-	12, // 24: pancake.build.v1.PancakeBuilder.ListLayers:output_type -> pancake.build.v1.ListLayersResponse
-	19, // [19:25] is the sub-list for method output_type
-	13, // [13:19] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	5,  // 11: pancake.build.v1.ListLayersResponse.layer:type_name -> pancake.build.v1.LayerHandle
+	2,  // 12: pancake.build.v1.BuildImageRequest.packages:type_name -> pancake.build.v1.Package
+	1,  // 13: pancake.build.v1.BuildImageChunk.artifact:type_name -> pancake.build.v1.BuildImageChunk.Artifact
+	19, // 14: pancake.build.v1.Catalog.recipe:type_name -> pancake.build.v1.Recipe
+	6,  // 15: pancake.build.v1.PancakeBuilder.BuildLayer:input_type -> pancake.build.v1.BuildLayerRequest
+	7,  // 16: pancake.build.v1.PancakeBuilder.LookupLayer:input_type -> pancake.build.v1.LookupLayerRequest
+	8,  // 17: pancake.build.v1.PancakeBuilder.BuildGeneration:input_type -> pancake.build.v1.BuildGenerationRequest
+	10, // 18: pancake.build.v1.PancakeBuilder.GetLayer:input_type -> pancake.build.v1.GetLayerRequest
+	14, // 19: pancake.build.v1.PancakeBuilder.UploadBlob:input_type -> pancake.build.v1.BlobChunk
+	12, // 20: pancake.build.v1.PancakeBuilder.ListLayers:input_type -> pancake.build.v1.ListLayersRequest
+	16, // 21: pancake.build.v1.PancakeBuilder.BuildImage:input_type -> pancake.build.v1.BuildImageRequest
+	5,  // 22: pancake.build.v1.PancakeBuilder.BuildLayer:output_type -> pancake.build.v1.LayerHandle
+	5,  // 23: pancake.build.v1.PancakeBuilder.LookupLayer:output_type -> pancake.build.v1.LayerHandle
+	9,  // 24: pancake.build.v1.PancakeBuilder.BuildGeneration:output_type -> pancake.build.v1.GenerationManifest
+	11, // 25: pancake.build.v1.PancakeBuilder.GetLayer:output_type -> pancake.build.v1.LayerChunk
+	15, // 26: pancake.build.v1.PancakeBuilder.UploadBlob:output_type -> pancake.build.v1.BlobReference
+	13, // 27: pancake.build.v1.PancakeBuilder.ListLayers:output_type -> pancake.build.v1.ListLayersResponse
+	17, // 28: pancake.build.v1.PancakeBuilder.BuildImage:output_type -> pancake.build.v1.BuildImageChunk
+	22, // [22:29] is the sub-list for method output_type
+	15, // [15:22] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
-func init() { file_internal_buildpb_build_proto_init() }
-func file_internal_buildpb_build_proto_init() {
-	if File_internal_buildpb_build_proto != nil {
+func init() { file_build_proto_init() }
+func file_build_proto_init() {
+	if File_build_proto != nil {
 		return
 	}
-	file_internal_buildpb_build_proto_msgTypes[0].OneofWrappers = []any{
+	file_build_proto_msgTypes[0].OneofWrappers = []any{
 		(*Package_Apt)(nil),
 		(*Package_Internal)(nil),
 	}
@@ -1490,18 +1827,18 @@ func file_internal_buildpb_build_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_buildpb_build_proto_rawDesc), len(file_internal_buildpb_build_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   17,
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_build_proto_rawDesc), len(file_build_proto_rawDesc)),
+			NumEnums:      2,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_internal_buildpb_build_proto_goTypes,
-		DependencyIndexes: file_internal_buildpb_build_proto_depIdxs,
-		EnumInfos:         file_internal_buildpb_build_proto_enumTypes,
-		MessageInfos:      file_internal_buildpb_build_proto_msgTypes,
+		GoTypes:           file_build_proto_goTypes,
+		DependencyIndexes: file_build_proto_depIdxs,
+		EnumInfos:         file_build_proto_enumTypes,
+		MessageInfos:      file_build_proto_msgTypes,
 	}.Build()
-	File_internal_buildpb_build_proto = out.File
-	file_internal_buildpb_build_proto_goTypes = nil
-	file_internal_buildpb_build_proto_depIdxs = nil
+	File_build_proto = out.File
+	file_build_proto_goTypes = nil
+	file_build_proto_depIdxs = nil
 }
