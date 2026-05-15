@@ -10,7 +10,7 @@ tools/pancake-go/
     cmd/                   # entrypoint
     *.go                   # service impls
     Dockerfile
-  ahkcid/                  # TPM AK Attestation CA service
+  attest-ca/                  # TPM AK Attestation CA service
   ca-server/               # step-ca wrapper (Dockerfile + init.sh only)
   sign-server/             # pancake-sign service (Phase 5)
   internal/
@@ -28,7 +28,7 @@ Single binary the operator runs:
 go install ./cmd/pancake
 ```
 
-Everything else (build server, ahkcid, sign service, ca-server) ships
+Everything else (build server, attest-ca, sign service, ca-server) ships
 as containers via `compose.yaml`:
 
 ```

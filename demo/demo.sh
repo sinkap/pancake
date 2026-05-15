@@ -107,7 +107,7 @@ PANCAKE="$PANCAKE_GO/bin/pancake"
 # ---------- tear down previous run ---------------------------------
 say "tearing down previous demo state"
 sudo kill "$(sudo cat "$VM_PID" 2>/dev/null)" 2>/dev/null || true
-docker rm -f "$CONTAINER" "$CA_CONTAINER" pancake-ahkcid-demo 2>/dev/null || true
+docker rm -f "$CONTAINER" "$CA_CONTAINER" pancake-attest-ca-demo 2>/dev/null || true
 SWTPM_PIDS=$(pgrep -f "swtpm.*pancake-demo" 2>/dev/null | head -3 || true)
 if [ -n "$SWTPM_PIDS" ]; then sudo kill $SWTPM_PIDS 2>/dev/null || true; fi
 sudo rm -rf "$WORK" "$SWTPM_STATE" "$SWTPM_SOCK"
@@ -150,33 +150,33 @@ done
 "$PANCAKE" ca-server status \
     --container "$CA_CONTAINER" --port "$CA_PORT" 2>&1 | sed 's/^/  /'
 
-# ---------- attestation CA (ahkcid) container ----------------------
-# Stand up ahkcid BEFORE bootstrap so we can pull its root cert and
+# ---------- attestation CA (attest-ca) container ----------------------
+# Stand up attest-ca BEFORE bootstrap so we can pull its root cert and
 # bake it into the pancake-orch-config verity layer along with the
 # step-ca root. This kills the post-boot scp of trust anchors.
-AHKCID_CONTAINER=pancake-ahkcid-demo
-AHKCID_VOLUME=pancake-ahkcid-state-demo
-AHKCID_PORT=8444
+ATTEST_CA_CONTAINER=pancake-attest-ca-demo
+ATTEST_CA_VOLUME=pancake-attest-ca-state-demo
+ATTEST_CA_PORT=8444
 
-say "build + start pancake-ahkcid (attestation CA, port $AHKCID_PORT)"
-docker rm -f "$AHKCID_CONTAINER" 2>/dev/null
-docker volume inspect "$AHKCID_VOLUME" >/dev/null 2>&1 || docker volume create "$AHKCID_VOLUME"
-docker build -f "$PANCAKE_GO/ahkcid/Dockerfile" \
-    -t pancake-ahkcid-demo "$PANCAKE_GO" 2>&1 | tail -3 | sed 's/^/  /'
-docker run -d --name "$AHKCID_CONTAINER" \
-    -p "$AHKCID_PORT:8444" \
-    -v "$AHKCID_VOLUME:/home/ahkcid" \
-    pancake-ahkcid-demo >/dev/null
+say "build + start pancake-attest-ca (attestation CA, port $ATTEST_CA_PORT)"
+docker rm -f "$ATTEST_CA_CONTAINER" 2>/dev/null
+docker volume inspect "$ATTEST_CA_VOLUME" >/dev/null 2>&1 || docker volume create "$ATTEST_CA_VOLUME"
+docker build -f "$PANCAKE_GO/attest-ca/Dockerfile" \
+    -t pancake-attest-ca-demo "$PANCAKE_GO" 2>&1 | tail -3 | sed 's/^/  /'
+docker run -d --name "$ATTEST_CA_CONTAINER" \
+    -p "$ATTEST_CA_PORT:8444" \
+    -v "$ATTEST_CA_VOLUME:/home/attestca" \
+    pancake-attest-ca-demo >/dev/null
 for i in 1 2 3 4 5 6 7 8; do
-    nc -z localhost "$AHKCID_PORT" 2>/dev/null && break
+    nc -z localhost "$ATTEST_CA_PORT" 2>/dev/null && break
     sleep 1
 done
 
-say "register ahkcid root with step-ca (its ACME-tpm provisioner trusts ahkcid AK certs)"
-curl -ks "https://localhost:$AHKCID_PORT/root.crt" > "$WORK/ahkcid-root.crt"
+say "register attest-ca root with step-ca (its ACME-tpm provisioner trusts attest-ca AK certs)"
+curl -ks "https://localhost:$ATTEST_CA_PORT/root.crt" > "$WORK/attest-ca-root.crt"
 "$PANCAKE" ca-server trust-roots \
     --container "$CA_CONTAINER" \
-    --roots "$WORK/ahkcid-root.crt" 2>&1 | sed 's/^/  /'
+    --roots "$WORK/attest-ca-root.crt" 2>&1 | sed 's/^/  /'
 
 say "pull step-ca root for orch-config layer"
 docker exec "$CA_CONTAINER" cat /home/step/certs/root_ca.crt > "$WORK/step-ca-root.crt"
@@ -192,7 +192,7 @@ say "mint orchestrator client-CA (signs the cert pancake orchestrate presents)"
 # envsubst materializes it at $RECIPE with the current shell env.
 say "write recipe → $RECIPE (from recipe.yaml.template)"
 export KIT BZIMAGE INITRAMFS BZ_OUT EFI_IMG KEY CERT REPO AUTH_KEY \
-       WORK CA_DIR CA_PORT AHKCID_PORT
+       WORK CA_DIR CA_PORT ATTEST_CA_PORT
 envsubst < "$REPO/demo/recipe.yaml.template" > "$RECIPE"
 
 say "bootstrap kit via build server (this runs mmdebstrap server-side, ~3 min cold)"

@@ -171,7 +171,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			efiOut, cmdline, signKey, signCert, builder)
 		orch = OrchArgs{
 			StepCARoot:   r.Orchestrator.StepCARoot,
-			AhkcidRoot:   r.Orchestrator.AhkcidRoot,
+			AttestCARoot:   r.Orchestrator.AttestCARoot,
 			ClientCARoot: r.Orchestrator.ClientCARoot,
 			CAURL:        r.Orchestrator.CAURL,
 			AttestCAURL:  r.Orchestrator.AttestCAURL,
@@ -415,7 +415,7 @@ type bootstrapArgs struct {
 // server's recipes.go; the client uploads these as blobs.
 type OrchArgs struct {
 	StepCARoot   string
-	AhkcidRoot   string
+	AttestCARoot   string
 	ClientCARoot string
 	CAURL        string
 	AttestCAURL  string
@@ -425,7 +425,7 @@ type OrchArgs struct {
 // orch-config layer is only built when this is true; otherwise the
 // VM falls back to the Slice 1 path (manually-delivered certs).
 func (o OrchArgs) hasAll() bool {
-	return o.StepCARoot != "" && o.AhkcidRoot != "" &&
+	return o.StepCARoot != "" && o.AttestCARoot != "" &&
 		o.ClientCARoot != "" && o.CAURL != "" && o.AttestCAURL != ""
 }
 

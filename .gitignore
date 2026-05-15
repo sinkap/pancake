@@ -29,3 +29,4 @@ vm/keys/
 *.o
 *.a
 initramfs/mount-overlay
+pancake-state.img

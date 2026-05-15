@@ -1,14 +1,14 @@
-# pancake-ahkcid: TPM 2.0 Attestation CA daemon, in a container.
+# pancake-attest-ca: TPM 2.0 Attestation CA daemon, in a container.
 #
 # Build (context = tools/pancake-go/):
-#   docker build -f ahkcid/Dockerfile -t pancake-ahkcid tools/pancake-go/
+#   docker build -f attest-ca/Dockerfile -t pancake-attest-ca tools/pancake-go/
 #
 # Run with named volume (so the AK-CA root key persists):
-#   docker volume create pancake-ahkcid-state
-#   docker run -d --name pancake-ahkcid \
+#   docker volume create pancake-attest-ca-state
+#   docker run -d --name pancake-attest-ca \
 #       -p 8444:8444 \
-#       -v pancake-ahkcid-state:/home/ahkcid \
-#       pancake-ahkcid
+#       -v pancake-attest-ca-state:/home/attestca \
+#       pancake-attest-ca
 #
 # Endpoints:
 #   :8444/attest    POST  TPM AK enrollment kickoff
@@ -25,16 +25,16 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -ldflags='-s -w' \
-    -o /out/pancake-ahkcid ./ahkcid/cmd
+    -o /out/pancake-attest-ca ./attest-ca/cmd
 
 FROM alpine:3.21
-RUN addgroup -g 65532 ahkcid && adduser -D -u 65532 -G ahkcid ahkcid && \
-    mkdir -p /home/ahkcid && chown ahkcid:ahkcid /home/ahkcid
-COPY --from=builder /out/pancake-ahkcid /usr/local/bin/pancake-ahkcid
-USER ahkcid
-WORKDIR /home/ahkcid
+RUN addgroup -g 65532 attestca && adduser -D -u 65532 -G attestca attestca && \
+    mkdir -p /home/attestca && chown attestca:attestca /home/attestca
+COPY --from=builder /out/pancake-attest-ca /usr/local/bin/pancake-attest-ca
+USER attestca
+WORKDIR /home/attestca
 
 EXPOSE 8444
-VOLUME /home/ahkcid
+VOLUME /home/attestca
 
-ENTRYPOINT ["/usr/local/bin/pancake-ahkcid"]
+ENTRYPOINT ["/usr/local/bin/pancake-attest-ca"]

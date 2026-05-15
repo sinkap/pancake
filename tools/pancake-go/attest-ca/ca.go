@@ -6,7 +6,7 @@
 // chain (against `attestationRoots`) and looks for the EK URN in
 // the URI SANs — that's the binding. Nothing else is required.
 
-package ahkcid
+package attestca
 
 import (
 	"crypto"
@@ -72,7 +72,7 @@ func loadOrMintCA(dir string) (*x509.Certificate, crypto.Signer, error) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "pancake-ahkcid"},
+		Subject:               pkix.Name{CommonName: "pancake-attest-ca"},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.AddDate(10, 0, 0),
 		IsCA:                  true,

@@ -595,13 +595,13 @@ func (s *Server) bakeOrchConfig(
 		CAURL        string `json:"ca_url"`
 		AttestCAURL  string `json:"attest_ca_url"`
 		StepCARoot   string `json:"step_ca_root"`
-		AhkcidRoot   string `json:"ahkcid_root"`
+		AttestCARoot   string `json:"ahkcid_root"`
 		ClientCARoot string `json:"client_ca_root"`
 	}{
 		CAURL:        strings.TrimSpace(string(bytesByRole["ca-url"])),
 		AttestCAURL:  strings.TrimSpace(string(bytesByRole["attest-ca-url"])),
 		StepCARoot:   "/etc/pancake/orch/step-ca-root.crt",
-		AhkcidRoot:   "/etc/pancake/orch/ahkcid-root.crt",
+		AttestCARoot:   "/etc/pancake/orch/ahkcid-root.crt",
 		ClientCARoot: "/etc/pancake/orch/client-ca-root.crt",
 	}
 	cfgBytes, err := json.MarshalIndent(cfg, "", "  ")

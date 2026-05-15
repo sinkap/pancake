@@ -1,5 +1,5 @@
 // enroll_attestca.go: thin wrapper around the smallstep
-// go.step.sm/crypto/tpm/attestation client. Asks pancake-ahkcid to
+// go.step.sm/crypto/tpm/attestation client. Asks pancake-attest-ca to
 // issue a cert chain for our AK; installs it on the AK so the
 // next ACME flow's x5c is non-empty.
 
@@ -21,7 +21,7 @@ func enrollAKWithAttestCA(
 	if caRootFile != "" {
 		opts = append(opts, tpmattest.WithRootsFile(caRootFile))
 	} else {
-		// Demo / dev path. ahkcid uses a self-signed listener cert
+		// Demo / dev path. pancake-attest-ca uses a self-signed listener cert
 		// when no externally-issued one is provided.
 		opts = append(opts, tpmattest.WithInsecure())
 	}

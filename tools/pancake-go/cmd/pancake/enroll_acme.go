@@ -69,7 +69,7 @@ func acmeTPMEnroll(o acmeTPMOpts) error {
 	}
 	fmt.Fprintf(os.Stderr, "[enroll] AK %q ready\n", ak.Name())
 
-	// Enroll the AK with pancake-ahkcid (TPM Attestation CA) so we
+	// Enroll the AK with pancake-attest-ca (TPM Attestation CA) so we
 	// have a cert chain to put in the ACME-tpm attestation
 	// statement's `x5c`. step-ca's ACME-tpm provisioner verifies
 	// this chain against `attestationRoots`.

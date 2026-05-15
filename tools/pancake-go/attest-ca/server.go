@@ -1,4 +1,4 @@
-// Package ahkcid implements a TPM 2.0 Attestation CA — the missing
+// Package attestca implements a TPM 2.0 Attestation CA — the missing
 // half of pancake's ACME-tpm enrollment flow. Same wire protocol as
 // smallstep's go.step.sm/crypto/tpm/attestation client speaks, so
 // the in-VM `pancake enroll` uses the upstream client unchanged.
@@ -14,7 +14,7 @@
 // server issues an AK cert with the EK URN as URI SAN — the binding
 // step-ca's hasValidIdentity() looks for.
 
-package ahkcid
+package attestca
 
 import (
 	"crypto"
@@ -153,7 +153,7 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 		td.Manufacturer = "id:00000000"
 	}
 	if td.Model == "" {
-		td.Model = "pancake-ahkcid"
+		td.Model = "pancake-attest-ca"
 	}
 	if td.Version == "" {
 		td.Version = "id:00000000"

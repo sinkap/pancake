@@ -102,9 +102,9 @@ type Orchestrator struct {
 
 	// StepCARoot — PEM trust root for CAURL's TLS server cert.
 	StepCARoot string `yaml:"step-ca-root"`
-	// AhkcidRoot — PEM trust root for AttestCAURL's TLS server
+	// AttestCARoot — PEM trust root for AttestCAURL's TLS server
 	// cert.
-	AhkcidRoot string `yaml:"ahkcid-root"`
+	AttestCARoot string `yaml:"ahkcid-root"`
 	// ClientCARoot — PEM cert pancaked uses to verify
 	// orchestrator-presented client certs (mTLS root).
 	ClientCARoot string `yaml:"client-ca-root"`
@@ -177,7 +177,7 @@ func (r *Recipe) expandPaths() {
 		&r.Outputs.Image, &r.Outputs.Initramfs, &r.Outputs.BzImage, &r.Outputs.EFI,
 		&r.Signing.Key, &r.Signing.Cert,
 		&r.Advanced.SrcRoot, &r.Advanced.PancakeBin, &r.Advanced.PancakedBin,
-		&r.Orchestrator.StepCARoot, &r.Orchestrator.AhkcidRoot,
+		&r.Orchestrator.StepCARoot, &r.Orchestrator.AttestCARoot,
 		&r.Orchestrator.ClientCARoot,
 	} {
 		*p = ExpandPath(*p)

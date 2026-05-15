@@ -1,4 +1,4 @@
-// pancake-ahkcid: TPM 2.0 Attestation CA daemon. Issues short-lived
+// pancake-attest-ca: TPM 2.0 Attestation CA daemon. Issues short-lived
 // AK certs containing the EK URN as URI SAN. Designed to run in
 // Docker alongside pancake-ca-server; the in-VM `pancake enroll`
 // hits this server first to obtain an AK cert chain, then runs
@@ -8,7 +8,7 @@
 // Defaults:
 //
 //	--listen   :8444
-//	--ca-dir   /home/ahkcid/ca   (mount as a volume to persist)
+//	--ca-dir   /home/attestca/ca   (mount as a volume to persist)
 //	--cert     <auto> server cert for HTTPS  (self-signed if absent)
 //	--key      <auto> server key
 //
@@ -37,13 +37,13 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/sinkap/pancake/tools/pancake-go/ahkcid"
+	"github.com/sinkap/pancake/tools/pancake-go/attest-ca"
 )
 
 func main() {
 	listen := flag.String("listen", ":8444",
 		"address:port for HTTPS listener")
-	caDir := flag.String("ca-dir", "/home/ahkcid/ca",
+	caDir := flag.String("ca-dir", "/home/attestca/ca",
 		"directory holding ca.{crt,key} (created if missing)")
 	certFile := flag.String("cert", "",
 		"server cert for HTTPS (auto-self-signed if empty)")
@@ -51,9 +51,9 @@ func main() {
 		"server key for HTTPS (auto if empty)")
 	flag.Parse()
 
-	srv, err := ahkcid.NewServer(*caDir)
+	srv, err := attestca.NewServer(*caDir)
 	if err != nil {
-		die("ahkcid.NewServer: %v", err)
+		die("attestca.NewServer: %v", err)
 	}
 
 	tlsCert, err := loadOrSelfSignServerCert(*certFile, *keyFile, *caDir)
@@ -71,7 +71,7 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	fmt.Fprintf(os.Stderr,
-		"[pancake-ahkcid] listening on %s (HTTPS, ca-dir=%s)\n",
+		"[pancake-attest-ca] listening on %s (HTTPS, ca-dir=%s)\n",
 		*listen, *caDir)
 	if err := httpSrv.ListenAndServeTLS("", ""); err != nil {
 		die("ListenAndServeTLS: %v", err)
@@ -102,12 +102,12 @@ func loadOrSelfSignServerCert(certFile, keyFile, caDir string) (tls.Certificate,
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "pancake-ahkcid"},
+		Subject:      pkix.Name{CommonName: "pancake-attest-ca"},
 		NotBefore:    now.Add(-time.Hour),
 		NotAfter:     now.AddDate(10, 0, 0),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{"localhost", "pancake-ahkcid", "pancake-attest-ca"},
+		DNSNames:     []string{"localhost", "pancake-attest-ca", "pancake-attest-ca"},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
@@ -133,6 +133,6 @@ func loadOrSelfSignServerCert(certFile, keyFile, caDir string) (tls.Certificate,
 }
 
 func die(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "pancake-ahkcid: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "pancake-attest-ca: "+format+"\n", args...)
 	os.Exit(1)
 }

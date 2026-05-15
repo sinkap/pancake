@@ -9,7 +9,7 @@
 // Certificate template, so we build the raw extension and attach
 // it via ExtraExtensions.
 
-package ahkcid
+package attestca
 
 import (
 	"crypto/x509/pkix"

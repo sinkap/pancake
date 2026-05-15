@@ -63,7 +63,7 @@ type orchConfig struct {
 	CAURL        string `json:"ca_url"`
 	AttestCAURL  string `json:"attest_ca_url"`
 	StepCARoot   string `json:"step_ca_root"`
-	AhkcidRoot   string `json:"ahkcid_root"`
+	AttestCARoot   string `json:"attest_ca_root"`
 	ClientCARoot string `json:"client_ca_root"`
 }
 
@@ -95,13 +95,13 @@ func cmdEnroll(_ *kit.Kit, args []string) int {
 			"ACME server's TLS. Get it from the orchestrator with "+
 			"`docker exec pancake-ca-server cat /home/step/certs/root_ca.crt`")
 	attestCAURL := fs.String("attest-ca-url", "",
-		"pancake-ahkcid base URL, e.g. https://orchestrator:8444 . "+
+		"pancake-attest-ca base URL, e.g. https://orchestrator:8444 . "+
 			"When set, the AK is enrolled with this Attestation CA "+
 			"before the ACME flow so step-ca's x5c chain validation "+
 			"succeeds. Required for TPMs without manufacturer-signed "+
 			"AK certs (i.e., almost all of them).")
 	attestCARoot := fs.String("attest-ca-root", "",
-		"PEM file containing the ahkcid TLS root (--attest-ca-url's "+
+		"PEM file containing the attest-ca TLS root (--attest-ca-url's "+
 			"server cert chain).")
 	deviceID := fs.String("device-id", "",
 		"the leaf cert's CN. Defaults to the system hostname.")
@@ -143,7 +143,7 @@ func cmdEnroll(_ *kit.Kit, args []string) int {
 			*attestCAURL = cfg.AttestCAURL
 		}
 		if *attestCARoot == "" {
-			*attestCARoot = cfg.AhkcidRoot
+			*attestCARoot = cfg.AttestCARoot
 		}
 		fmt.Fprintf(os.Stderr,
 			"[enroll] orch config loaded from %s (ca=%s attest=%s)\n",

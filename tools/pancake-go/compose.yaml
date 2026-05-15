@@ -1,7 +1,7 @@
 # Brings up the pancake orchestrator-side stack:
 #
 #   pancake-ca-server     step-ca, ACME-tpm provisioner       :8443
-#   pancake-ahkcid        TPM AK Attestation CA               :8444
+#   pancake-attest-ca        TPM AK Attestation CA               :8444
 #   pancake-build-server  gRPC layer cache + builder          :7879
 #   pancake-sign          UKI + manifest signing service      :7880
 #
@@ -12,7 +12,7 @@
 # State persists in named volumes; `docker compose down -v` wipes it.
 #
 # The three services are independent at startup — step-ca's
-# ACME-tpm provisioner does not need ahkcid's root at boot time;
+# ACME-tpm provisioner does not need attest-ca's root at boot time;
 # the operator wires it in later via `pancake ca-server
 # enroll-device` (or by setting attestationRoots in ca.json).
 
@@ -33,16 +33,16 @@ services:
     volumes:
       - pancake-ca-state:/home/step
 
-  pancake-ahkcid:
+  pancake-attest-ca:
     build:
       context: .
-      dockerfile: ahkcid/Dockerfile
-    image: pancake-ahkcid:local
-    container_name: pancake-ahkcid
+      dockerfile: attest-ca/Dockerfile
+    image: pancake-attest-ca:local
+    container_name: pancake-attest-ca
     ports:
       - "8444:8444"
     volumes:
-      - pancake-ahkcid-state:/home/ahkcid
+      - pancake-attest-ca-state:/home/attest-ca
 
   pancake-build-server:
     build:
@@ -86,6 +86,6 @@ services:
 
 volumes:
   pancake-ca-state:
-  pancake-ahkcid-state:
+  pancake-attest-ca-state:
   pancake-build-cache:
   pancake-sign-state:

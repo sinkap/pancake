@@ -3,7 +3,7 @@
 # expected to be defined in the calling shell environment:
 #
 #   KIT, BZIMAGE, INITRAMFS, BZ_OUT, EFI_IMG, KEY, CERT, REPO,
-#   AUTH_KEY, WORK, CA_DIR, CA_PORT, AHKCID_PORT
+#   AUTH_KEY, WORK, CA_DIR, CA_PORT, ATTEST_CA_PORT
 #
 # Anything else in the file is passed through unchanged. Comments
 # stay because envsubst doesn't filter them.
@@ -44,7 +44,7 @@ orchestrator:
   # user-mode networking) so the in-VM enroll can reach the host
   # containers without DNS or extra routing setup.
   ca-url: https://10.0.2.2:${CA_PORT}/acme/tpm/directory
-  attest-ca-url: https://10.0.2.2:${AHKCID_PORT}
+  attest-ca-url: https://10.0.2.2:${ATTEST_CA_PORT}
   step-ca-root: ${WORK}/step-ca-root.crt
-  ahkcid-root: ${WORK}/ahkcid-root.crt
+  attest-ca-root: ${WORK}/attest-ca-root.crt
   client-ca-root: ${CA_DIR}/ca.crt
