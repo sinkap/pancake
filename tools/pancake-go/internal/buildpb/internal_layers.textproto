@@ -53,3 +53,31 @@ recipe {
   requires_version: true
   required_blobs: "binary"
 }
+
+recipe {
+  name: "pancake-host"
+  description: "Per-host identity layer: hostname, ssh host keys, "
+               "authorized_keys, sshd_config, networkd config. "
+               "All inputs are blobs (small string inputs like the "
+               "hostname are encoded as their raw bytes)."
+  required_blobs: "hostname"
+  optional_blobs: "ssh-authorized-keys"
+  optional_blobs: "ssh-host-rsa-key"
+  optional_blobs: "ssh-host-rsa-key.pub"
+  optional_blobs: "ssh-host-ecdsa-key"
+  optional_blobs: "ssh-host-ecdsa-key.pub"
+  optional_blobs: "ssh-host-ed25519-key"
+  optional_blobs: "ssh-host-ed25519-key.pub"
+}
+
+recipe {
+  name: "orch-config"
+  description: "Orchestrator trust anchors + URLs at "
+               "/etc/pancake/orch/. URLs are blobs (raw string "
+               "bytes); roots are PEM blobs."
+  required_blobs: "ca-url"
+  required_blobs: "attest-ca-url"
+  required_blobs: "step-ca-root"
+  required_blobs: "ahkcid-root"
+  required_blobs: "client-ca-root"
+}

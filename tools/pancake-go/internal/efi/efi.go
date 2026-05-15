@@ -30,6 +30,7 @@
 package efi
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,6 +39,7 @@ import (
 	"syscall"
 
 	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
 )
 
 // UKIOpts: build a Unified Kernel Image.
@@ -47,13 +49,24 @@ type UKIOpts struct {
 	Cmdline string // kernel cmdline string ("console=... rdinit=/init ...")
 	Out     string // output .efi path
 	UName   string // optional: --uname value (kernel version label)
-	// SignKey + SignCert: when both set, ukify chains to sbsign and
-	// produces a sb-signed UKI (one signed PE binary). UEFI Secure Boot
-	// verifies the signature against db before loading.
+
+	// SignKey + SignCert (legacy in-process path): when both set AND
+	// Signer is nil, ukify chains directly to sbsign and produces a
+	// signed UKI in one shot. Used by the deprecated client-side
+	// bootstrap path.
 	SignKey, SignCert string
+
+	// Signer (preferred): when set, BuildUKI invokes ukify WITHOUT
+	// the --secureboot-* args (produces an unsigned PE), then hands
+	// the bytes to Signer.SignUKI to get the signed version. This
+	// is the path used by the build server when it delegates
+	// signing to the pancake-sign service. SignKey/SignCert are
+	// ignored when Signer is non-nil.
+	Signer sign.Signer
 }
 
-// BuildUKI invokes systemd-ukify(1).
+// BuildUKI invokes systemd-ukify(1) and (optionally) post-processes
+// the result through Signer.SignUKI.
 func BuildUKI(o UKIOpts) error {
 	if o.Linux == "" || o.Initrd == "" || o.Out == "" {
 		return fmt.Errorf("uki: Linux, Initrd, Out all required")
@@ -67,7 +80,7 @@ func BuildUKI(o UKIOpts) error {
 	if o.UName != "" {
 		args = append(args, "--uname", o.UName)
 	}
-	if o.SignKey != "" && o.SignCert != "" {
+	if o.Signer == nil && o.SignKey != "" && o.SignCert != "" {
 		args = append(args,
 			"--secureboot-private-key", o.SignKey,
 			"--secureboot-certificate", o.SignCert)
@@ -80,13 +93,31 @@ func BuildUKI(o UKIOpts) error {
 	}); err != nil {
 		return err
 	}
-	st, _ := os.Stat(o.Out)
-	tag := ""
-	if o.SignKey != "" {
-		tag = " [signed]"
+
+	// Post-process via Signer when set: read the unsigned PE, sign,
+	// overwrite. The sbsign call lives inside Signer.SignUKI (in
+	// LocalSigner that's an in-process exec; in RemoteSigner that's
+	// a gRPC round-trip to pancake-sign).
+	signedTag := ""
+	if o.Signer != nil {
+		unsigned, err := os.ReadFile(o.Out)
+		if err != nil {
+			return fmt.Errorf("read unsigned UKI: %w", err)
+		}
+		signed, err := o.Signer.SignUKI(context.Background(), unsigned)
+		if err != nil {
+			return fmt.Errorf("Signer.SignUKI: %w", err)
+		}
+		if err := os.WriteFile(o.Out, signed, 0o644); err != nil {
+			return fmt.Errorf("write signed UKI: %w", err)
+		}
+		signedTag = " [signed via Signer]"
+	} else if o.SignKey != "" {
+		signedTag = " [signed inline]"
 	}
+	st, _ := os.Stat(o.Out)
 	fmt.Fprintf(os.Stderr, "[efi] UKI %s (%s)%s\n",
-		o.Out, humanSize(st.Size()), tag)
+		o.Out, humanSize(st.Size()), signedTag)
 	return nil
 }
 

@@ -2,8 +2,17 @@
 # cache lives at /var/lib/pancake-build-server — mount a host volume
 # (or named volume) there to keep artifacts across container restarts.
 #
-# Build (context = tools/pancake-go/):
-#   docker build -f server/Dockerfile -t pancake-build-server tools/pancake-go/
+# Build (context = REPO ROOT, not tools/pancake-go/):
+#   docker build -f tools/pancake-go/server/Dockerfile -t pancake-build-server .
+#
+# This wider context lets the image bake in the canonical pancake +
+# pancaked + mount-overlay + pivot-root binaries (under
+# /usr/local/share/pancake-bundled/) so recipes that don't get
+# operator-uploaded override blobs can fall back to known-good
+# versions shipped with the build server image.
+#
+# The compose.yaml in tools/pancake-go/ uses the right context;
+# manual `docker build` invocations need to be from the repo root.
 #
 # Run with named volume:
 #   docker volume create pancake-build-cache
@@ -13,32 +22,29 @@
 #       -v pancake-build-cache:/var/lib/pancake-build-server \
 #       pancake-build-server
 #
-# Or a host bind-mount (so cache survives `docker rm -v`):
-#   docker run -d --name pancake-build-server \
-#       --privileged \
-#       -p 7879:7879 \
-#       -v /srv/pancake-build-cache:/var/lib/pancake-build-server \
-#       pancake-build-server
-#
 # Why --privileged: mmdebstrap performs chroot + bind-mount, which
-# need CAP_SYS_ADMIN. veritysetup also wants device-mapper. Default
-# Docker capabilities are too restrictive. If you'd rather scope
-# tightly: --cap-add SYS_ADMIN --device /dev/loop-control --device
-# /dev/mapper/control plus --security-opt apparmor=unconfined and a
-# tmpfs at /tmp may suffice; --privileged is the easy button.
-#
-# Health: the server logs "[pancake-build-server] listening on :7879"
-# at start. Until LookupLayer / a healthcheck RPC exist, do `nc -z
-# host 7879` for a basic up-check.
+# need CAP_SYS_ADMIN. veritysetup also wants device-mapper.
 
-# ----- stage 1: build the Go binary --------------------------------
+# ----- stage 1: build all the Go + C binaries ----------------------
 FROM golang:1.25-bookworm AS builder
-WORKDIR /src
-COPY go.mod go.sum ./
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src/tools/pancake-go
+COPY tools/pancake-go/go.mod tools/pancake-go/go.sum ./
 RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -ldflags='-s -w' \
-        -o /out/pancake-build-server ./server/cmd
+COPY tools/pancake-go ./
+RUN CGO_ENABLED=0 go build -ldflags='-s -w' -o /out/pancake-build-server ./server/cmd
+RUN CGO_ENABLED=0 go build -ldflags='-s -w' -o /out/pancake          ./cmd/pancake
+RUN CGO_ENABLED=0 go build -ldflags='-s -w' -o /out/pancaked         ./daemon/pancaked
+
+# C helpers — sourced from the wider repo context.
+WORKDIR /src
+COPY initramfs/mount-overlay.c ./mount-overlay.c
+COPY pivot-root.c ./pivot-root.c
+RUN gcc -O2 -Wall -Wextra -static -o /out/mount-overlay ./mount-overlay.c
+RUN gcc -O2 -Wall -Wextra -static -o /out/pivot-root    ./pivot-root.c
 
 # ----- stage 2: runtime --------------------------------------------
 FROM ubuntu:24.04
@@ -51,16 +57,33 @@ ARG DEBIAN_FRONTEND=noninteractive
 #   cryptsetup-bin    — veritysetup (per-layer dm-verity hash tree)
 #   dpkg              — dpkg-query (already in ubuntu base, listed for clarity)
 #   sudo              — runner.Sudo wrappers in internal/runner
-#   tar, coreutils, util-linux — staging + ownership ops (in base)
+#   openssh-client    — ssh-keygen for fresh host-key fallback in pancake-host recipe
+#   tar               — modules tarball extraction in pancake-modules recipe
 RUN apt-get update && apt-get install -y --no-install-recommends \
         mmdebstrap \
         e2fsprogs \
         cryptsetup-bin \
         dpkg \
         sudo \
+        openssh-client \
+        tar \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/pancake-build-server /usr/local/bin/pancake-build-server
+
+# Bundled binaries the recipe handlers fall back to when the operator
+# doesn't UploadBlob an override. Path matches server's
+# --bundled-bins-dir default.
+RUN mkdir -p /usr/local/share/pancake-bundled
+COPY --from=builder /out/pancake          /usr/local/share/pancake-bundled/pancake
+COPY --from=builder /out/pancaked         /usr/local/share/pancake-bundled/pancaked
+COPY --from=builder /out/mount-overlay    /usr/local/share/pancake-bundled/mount-overlay
+COPY --from=builder /out/pivot-root       /usr/local/share/pancake-bundled/pivot-root
+
+# initramfs entrypoint script (sh + openssl + tpm2-tools). Server
+# stages this into every initramfs it builds via build_image.go;
+# operators can't override this v1.
+COPY initramfs/init                       /usr/local/share/pancake-bundled/init
 
 # Cache lives here; mount a host volume to persist.
 RUN mkdir -p /var/lib/pancake-build-server

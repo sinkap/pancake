@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
 	"github.com/sinkap/pancake/tools/pancake-go/server"
 	"google.golang.org/grpc"
 )
@@ -18,12 +19,49 @@ func main() {
 	addr := flag.String("listen", ":7879", "gRPC listen address")
 	cacheDir := flag.String("cache", "/var/lib/pancake-build-server",
 		"cache directory root (created if missing)")
+	bundledBinsDir := flag.String("bundled-bins-dir",
+		"/usr/local/share/pancake-bundled",
+		"directory where the container image stages pancake / pancaked "+
+			"/ mount-overlay / pivot-root for recipes that don't get "+
+			"operator-uploaded override blobs. Empty = no fallback.")
+	signKey := flag.String("sign-key", "",
+		"PEM RSA private key for in-process UKI + manifest signing. "+
+			"Mutually exclusive with --sign-addr. Empty = no signing.")
+	signCert := flag.String("sign-cert", "",
+		"PEM X.509 cert paired with --sign-key. Required when --sign-key is set.")
+	signAddr := flag.String("sign-addr", "",
+		"base URL of a pancake-sign service (e.g. "+
+			"http://pancake-sign:7880). When set, UKI + manifest "+
+			"signing routes there over HTTP and the build server "+
+			"holds no private key. Mutually exclusive with --sign-key.")
 	flag.Parse()
 
 	if err := os.MkdirAll(*cacheDir, 0o755); err != nil {
 		log.Fatalf("mkdir cache: %v", err)
 	}
-	srv, err := server.New(server.Opts{CacheDir: *cacheDir})
+
+	var signer sign.Signer
+	switch {
+	case *signKey != "" && *signAddr != "":
+		log.Fatalf("--sign-key and --sign-addr are mutually exclusive")
+	case *signKey != "":
+		if *signCert == "" {
+			log.Fatalf("--sign-key requires --sign-cert")
+		}
+		signer = &sign.LocalSigner{KeyPath: *signKey, CertPath: *signCert}
+		fmt.Fprintf(os.Stderr,
+			"[pancake-build-server] signer: local PEM (%s)\n", *signKey)
+	case *signAddr != "":
+		signer = &sign.RemoteSigner{BaseURL: *signAddr}
+		fmt.Fprintf(os.Stderr,
+			"[pancake-build-server] signer: remote (%s)\n", *signAddr)
+	}
+
+	srv, err := server.New(server.Opts{
+		CacheDir:       *cacheDir,
+		BundledBinsDir: *bundledBinsDir,
+		Signer:         signer,
+	})
 	if err != nil {
 		log.Fatalf("server.New: %v", err)
 	}

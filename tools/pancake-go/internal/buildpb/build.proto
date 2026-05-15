@@ -98,6 +98,15 @@ service PancakeBuilder {
   // ListLayers enumerates the cache. Optional name filter. No
   // pagination yet — caches stay in the low thousands.
   rpc ListLayers(ListLayersRequest) returns (ListLayersResponse);
+
+  // BuildImage is the operator-facing one-shot RPC: take a recipe
+  // (packages + already-uploaded blobs + assembly knobs), build all
+  // referenced layers (calling BuildGeneration internally), pack
+  // the disk image + initramfs + UKI + EFI disk, sign via
+  // pancake-sign (when the server has --sign-addr set), and stream
+  // the resulting artifacts back. Replaces the client-side
+  // assembly that used to live in cmd/pancake/bootstrap_builder.go.
+  rpc BuildImage(BuildImageRequest) returns (stream BuildImageChunk);
 }
 
 // ============================================================================
@@ -340,6 +349,66 @@ message BlobChunk {
 message BlobReference {
   string sha256 = 1;
   int64  size   = 2;
+}
+
+// ============================================================================
+// BuildImage (operator-facing one-shot)
+// ============================================================================
+
+// BuildImageRequest is the union of inputs `pancake bootstrap` used
+// to feed into its local assembly chain. The server runs the same
+// pipeline (BuildGeneration → pack disk → build initramfs → build
+// UKI → pack EFI disk → sign), then streams the artifacts back.
+//
+// All blob inputs (SSH key, custom kernel, modules tarball, three
+// orchestrator trust roots, two URLs, hostname) are referenced by
+// sha256 from a prior UploadBlob call — exactly like the
+// PancakeInternal.blobs map. Tiny string inputs (hostname, URLs)
+// are encoded as raw-bytes blobs.
+message BuildImageRequest {
+  // Same overlay-ordered package set BuildGeneration takes.
+  repeated Package packages = 1;
+
+  // Assembly knobs (formerly CLI flags on `pancake bootstrap`).
+  string cmdline      = 2;   // baked into UKI for --want_uki
+  string kernel_uname = 3;   // for UKI's --uname
+
+  // What artifacts to return. Empty = none of them; useful for
+  // "warm the cache" calls.
+  bool want_disk_image = 4;
+  bool want_initramfs  = 5;
+  bool want_bzimage    = 6;
+  bool want_uki        = 7;
+  bool want_efi_disk   = 8;
+  bool want_manifest   = 9;   // signed generation manifest
+  bool want_pubkey     = 10;  // signing cert pubkey for the operator
+                              // to verify or to bake into next builds
+
+  // Forwarded to pancake-sign when present.
+  string signing_key_id = 11;
+
+  // Generation lineage. Same semantics as BuildGenerationRequest.
+  int32  parent      = 12;
+  int32  counter     = 13;
+  string description = 14;
+}
+
+message BuildImageChunk {
+  enum Artifact {
+    ARTIFACT_UNSPECIFIED = 0;
+    ARTIFACT_DISK_IMAGE  = 1;  // ext4 with kit (sparse-aware)
+    ARTIFACT_INITRAMFS   = 2;  // .cpio.gz
+    ARTIFACT_BZIMAGE     = 3;  // raw bzImage copy
+    ARTIFACT_UKI         = 4;  // signed PE binary
+    ARTIFACT_EFI_DISK    = 5;  // GPT + ESP + rootfs (sparse-aware)
+    ARTIFACT_MANIFEST    = 6;  // signed generation manifest
+    ARTIFACT_PUBKEY      = 7;  // signing cert pubkey (PEM)
+  }
+  Artifact artifact = 1;
+  bytes    data     = 2;
+  int64    offset   = 3;   // for sparse files (ARTIFACT_DISK_IMAGE,
+                           // ARTIFACT_EFI_DISK)
+  bool     last     = 4;   // last chunk for this artifact
 }
 
 // ============================================================================

@@ -36,6 +36,7 @@ func (s *Server) BuildGeneration(
 ) (*buildpb.GenerationManifest, error) {
 	var aptPkgs []*buildpb.APT
 	var baseSpec *buildpb.PancakeInternal
+	var otherInternals []*buildpb.PancakeInternal
 	var suite, arch, mirror string
 
 	for _, p := range req.Packages {
@@ -50,13 +51,10 @@ func (s *Server) BuildGeneration(
 					x.Apt.Suite, x.Apt.Arch, suite, arch)
 			}
 		case *buildpb.Package_Internal:
-			switch x.Internal.Recipe {
-			case "base":
+			if x.Internal.Recipe == "base" {
 				baseSpec = x.Internal
-			default:
-				return nil, status.Errorf(codes.Unimplemented,
-					"recipe %q not supported in v1 (only \"base\")",
-					x.Internal.Recipe)
+			} else {
+				otherInternals = append(otherInternals, x.Internal)
 			}
 		default:
 			return nil, status.Error(codes.InvalidArgument,
@@ -180,6 +178,19 @@ func (s *Server) BuildGeneration(
 		// baseline state wins). Insert at index 0.
 		handles = append([]*buildpb.LayerHandle{h}, handles...)
 	}
+
+	// Other internal recipes: runtime / pancaked / kernel / modules /
+	// pancake-host / orch-config. Each is independent of the apt
+	// sandbox; bake them and merge into handles, then sort the whole
+	// set into overlay order before composing the manifest.
+	for _, in := range otherInternals {
+		h, err := s.bakeInternal(work, in)
+		if err != nil {
+			return nil, fmt.Errorf("bake internal %s: %w", in.Recipe, err)
+		}
+		handles = append(handles, h)
+	}
+	handles = sortOverlayOrder(handles)
 
 	// Compose generation manifest TOML using the same kit format the
 	// client expects in kit/generations/<id>/manifest.toml. We DON'T

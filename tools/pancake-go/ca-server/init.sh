@@ -70,6 +70,19 @@ if [ ! -f "$CA_HOME/config/ca.json" ]; then
 }
 TPL
 
+    # X.509 template for the pancake-sign service's code-signing
+    # leaf cert. EKU=codeSigning is what UEFI Secure Boot's `db`
+    # check looks for on a signed UKI's leaf. KeyUsage drops
+    # keyEncipherment (signing-only) and adds digitalSignature.
+    cat > "$CA_HOME/templates/code-sign.tpl" <<'TPL'
+{
+    "subject": {{ toJson .Subject }},
+    "sans": {{ toJson .SANs }},
+    "keyUsage": ["digitalSignature"],
+    "extKeyUsage": ["codeSigning"]
+}
+TPL
+
     # Add the ACME-tpm provisioner. `step ca provisioner add` writes
     # straight to the on-disk ca.json since the daemon isn't running
     # yet.
@@ -81,6 +94,21 @@ TPL
         --x509-template "$CA_HOME/templates/server-auth.tpl" \
         --ca-config "$CA_HOME/config/ca.json" \
         2>&1 | sed 's/^/  /'
+
+    # Add a JWK provisioner for the code-signing flow. pancake-sign
+    # uses this provisioner (one-shot CSR with the JWK key) to mint
+    # its leaf cert chained to step-ca's root. Operators enroll
+    # step-ca's root in UEFI db once → any leaf this provisioner
+    # issues can sign UKIs that boot.
+    SIGN_PROVISIONER="${PANCAKE_SIGN_PROVISIONER_NAME:-code-sign}"
+    echo "[pancake-ca] adding JWK provisioner '$SIGN_PROVISIONER' (code-signing leaves)"
+    step ca provisioner add "$SIGN_PROVISIONER" \
+        --type JWK \
+        --create \
+        --password-file "$PWFILE" \
+        --x509-template "$CA_HOME/templates/code-sign.tpl" \
+        --ca-config "$CA_HOME/config/ca.json" \
+        2>&1 | sed 's/^/  /' || true
 
     FP=$(step certificate fingerprint "$CA_HOME/certs/root_ca.crt")
     echo "[pancake-ca] root fingerprint: $FP"

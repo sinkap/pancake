@@ -38,22 +38,58 @@ var DefaultPackages = []string{
 	"xxd", // for hex<->binary conversion in the TPM-counter check
 }
 
-// Opts configures Build. SrcRoot must point at the fs-pancake source tree
-// (where initramfs/init and initramfs/mount-overlay.c live). Caller must
-// have mmdebstrap, cc, cpio, gzip, depmod available on the host.
+// Opts configures Build. Most fields fall back to legacy
+// host-relative defaults when empty, which keeps the deprecated
+// client-side bootstrap path working until Phase 6 deletes it. A
+// server-side caller supplies all the new explicit-source fields.
+//
+// Caller must have mmdebstrap, cpio, gzip, depmod available; cc is
+// only needed when MountOverlayBin is empty (legacy compile path).
 type Opts struct {
-	OutPath  string   // <foo>.cpio.gz
-	KVer     string   // kernel version under /lib/modules/<KVer>
-	SrcRoot  string   // path to fs-pancake checkout
+	OutPath  string   // <foo>.cpio.gz (required)
+	KVer     string   // kernel version (used as the /lib/modules/<KVer> dir name)
 	Suite    string   // mmdebstrap suite, default "noble"
 	Mirror   string   // default Ubuntu archive
 	Packages []string // override DefaultPackages if non-nil
 	Stage    string   // override staging dir, default /tmp/pancake-initramfs-stage
 	Force    bool     // rebuild stage even if dir exists (mmdebstrap is slow)
-	// PubKeyPath: when set, copy this PEM-encoded public key into the
-	// initramfs at /etc/pancake/manifest.pubkey. /init then uses it to
-	// verify the manifest signature before mounting the overlay.
+
+	// SrcRoot (legacy / client path): when non-empty, the builder
+	// reads init from <SrcRoot>/initramfs/init and compiles
+	// mount-overlay.c from <SrcRoot>/initramfs/mount-overlay.c, and
+	// reads modules from /lib/modules/<KVer>. Phase 6 deletes this
+	// path; new callers should set the explicit fields below.
+	SrcRoot string
+
+	// ModulesDir (preferred): directory containing the kernel
+	// modules tree to bake in. Should already have the
+	// `lib/modules/<KVer>` layout — Build copies the entire
+	// `<ModulesDir>/lib/modules/<KVer>` subtree into the staging
+	// area. When empty, Build falls back to /lib/modules/<KVer> on
+	// the host.
+	ModulesDir string
+
+	// InitSrcPath (preferred): path to the `/init` shell script
+	// that becomes the initramfs entrypoint. Empty falls back to
+	// SrcRoot/initramfs/init.
+	InitSrcPath string
+
+	// MountOverlayBin (preferred): path to a pre-compiled
+	// mount-overlay binary. Empty falls back to compiling
+	// SrcRoot/initramfs/mount-overlay.c. Saves having to ship
+	// gcc + libc-dev to the build server.
+	MountOverlayBin string
+
+	// PubKeyPath: when set, copy this PEM-encoded public key into
+	// the initramfs at /etc/pancake/manifest.pubkey. /init uses it
+	// to verify the manifest signature before mounting the overlay.
+	// Mutually exclusive with PubKeyBytes.
 	PubKeyPath string
+
+	// PubKeyBytes (preferred): same effect as PubKeyPath but the
+	// caller supplies the bytes directly. Server-side callers use
+	// this to avoid spilling the pubkey to disk before staging.
+	PubKeyBytes []byte
 }
 
 // Build assembles the initramfs into o.OutPath. Steps mirror the shell
@@ -64,10 +100,6 @@ func Build(o Opts) error {
 	}
 	if o.KVer == "" {
 		return fmt.Errorf("initramfs: KVer required")
-	}
-	if o.SrcRoot == "" {
-		return fmt.Errorf("initramfs: SrcRoot required (location of " +
-			"initramfs/init and initramfs/mount-overlay.c)")
 	}
 	if o.Suite == "" {
 		o.Suite = "noble"
@@ -82,18 +114,50 @@ func Build(o Opts) error {
 		o.Stage = "/tmp/pancake-initramfs-stage"
 	}
 
+	// Modules: explicit ModulesDir wins; otherwise the host's
+	// /lib/modules (legacy client path).
 	modSrc := filepath.Join("/lib/modules", o.KVer)
+	if o.ModulesDir != "" {
+		modSrc = filepath.Join(o.ModulesDir, "lib/modules", o.KVer)
+	}
 	if _, err := os.Stat(modSrc); err != nil {
 		return fmt.Errorf("initramfs: kernel modules dir not found: %s "+
-			"(install matching headers/modules first)", modSrc)
+			"(set Opts.ModulesDir to a kit-style tree, or install "+
+			"matching modules under /lib/modules on the host)", modSrc)
 	}
-	initSrc := filepath.Join(o.SrcRoot, "initramfs", "init")
+
+	// Init script source: explicit InitSrcPath wins; otherwise
+	// SrcRoot/initramfs/init.
+	initSrc := o.InitSrcPath
+	if initSrc == "" {
+		if o.SrcRoot == "" {
+			return fmt.Errorf("initramfs: InitSrcPath or SrcRoot required " +
+				"(need a path to the /init shell script)")
+		}
+		initSrc = filepath.Join(o.SrcRoot, "initramfs", "init")
+	}
 	if _, err := os.Stat(initSrc); err != nil {
-		return fmt.Errorf("initramfs: %s missing — wrong --src-root?", initSrc)
+		return fmt.Errorf("initramfs: %s missing", initSrc)
 	}
-	moSrc := filepath.Join(o.SrcRoot, "initramfs", "mount-overlay.c")
-	if _, err := os.Stat(moSrc); err != nil {
-		return fmt.Errorf("initramfs: %s missing — wrong --src-root?", moSrc)
+
+	// mount-overlay binary: prefer pre-compiled MountOverlayBin
+	// over compiling from C source.
+	moSrc := ""
+	if o.MountOverlayBin == "" {
+		if o.SrcRoot == "" {
+			return fmt.Errorf("initramfs: MountOverlayBin or SrcRoot " +
+				"required (need either a pre-compiled mount-overlay " +
+				"or its C source)")
+		}
+		moSrc = filepath.Join(o.SrcRoot, "initramfs", "mount-overlay.c")
+		if _, err := os.Stat(moSrc); err != nil {
+			return fmt.Errorf("initramfs: %s missing", moSrc)
+		}
+	} else {
+		if _, err := os.Stat(o.MountOverlayBin); err != nil {
+			return fmt.Errorf("initramfs: MountOverlayBin %s: %w",
+				o.MountOverlayBin, err)
+		}
 	}
 
 	// 1. mmdebstrap into staging (skip if already present and not forced).
@@ -129,18 +193,26 @@ func Build(o Opts) error {
 		return err
 	}
 
-	// 3. /sbin/mount-overlay (compile from C).
-	fmt.Fprintln(os.Stderr, "[initramfs] compiling + installing /sbin/mount-overlay")
-	tmpBin := "/tmp/_pancake-initramfs-mount-overlay"
-	if err := runner.Run(runner.Cmd{
-		Argv: []string{"cc", "-O2", "-Wall", "-Wextra", "-static",
-			"-o", tmpBin, moSrc},
-	}); err != nil {
-		return err
+	// 3. /sbin/mount-overlay: prefer the pre-compiled binary path.
+	binPath := o.MountOverlayBin
+	if binPath == "" {
+		fmt.Fprintln(os.Stderr,
+			"[initramfs] compiling + installing /sbin/mount-overlay")
+		binPath = "/tmp/_pancake-initramfs-mount-overlay"
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"cc", "-O2", "-Wall", "-Wextra", "-static",
+				"-o", binPath, moSrc},
+		}); err != nil {
+			return err
+		}
+		defer os.Remove(binPath)
+	} else {
+		fmt.Fprintf(os.Stderr,
+			"[initramfs] installing pre-compiled /sbin/mount-overlay (%s)\n",
+			binPath)
 	}
-	defer os.Remove(tmpBin)
 	if err := runner.Run(runner.Cmd{
-		Argv: []string{"install", "-m", "0755", tmpBin,
+		Argv: []string{"install", "-m", "0755", binPath,
 			filepath.Join(o.Stage, "sbin", "mount-overlay")},
 		Sudo: true,
 	}); err != nil {
@@ -183,10 +255,27 @@ func Build(o Opts) error {
 	// 4b. Manifest pubkey for /init to verify the kit's manifest signature
 	// before the overlay is mounted. If absent, /init will skip verification
 	// (and warn) — explicit policy lives in initramfs/init.
-	if o.PubKeyPath != "" {
+	pubkeySrc := o.PubKeyPath
+	if pubkeySrc == "" && len(o.PubKeyBytes) > 0 {
+		// Spill bytes to a tmp so the existing install(1) shell-out
+		// path works without special-casing.
+		f, err := os.CreateTemp("", "pancake-initramfs-pubkey-*.pem")
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(o.PubKeyBytes); err != nil {
+			f.Close()
+			os.Remove(f.Name())
+			return err
+		}
+		f.Close()
+		pubkeySrc = f.Name()
+		defer os.Remove(pubkeySrc)
+	}
+	if pubkeySrc != "" {
 		fmt.Fprintf(os.Stderr,
 			"[initramfs] installing /etc/pancake/manifest.pubkey from %s\n",
-			o.PubKeyPath)
+			pubkeySrc)
 		if err := runner.Run(runner.Cmd{
 			Argv: []string{"install", "-d", "-m", "0755",
 				filepath.Join(o.Stage, "etc/pancake")},
@@ -195,7 +284,7 @@ func Build(o Opts) error {
 			return err
 		}
 		if err := runner.Run(runner.Cmd{
-			Argv: []string{"install", "-m", "0644", o.PubKeyPath,
+			Argv: []string{"install", "-m", "0644", pubkeySrc,
 				filepath.Join(o.Stage, "etc/pancake/manifest.pubkey")},
 			Sudo: true,
 		}); err != nil {
