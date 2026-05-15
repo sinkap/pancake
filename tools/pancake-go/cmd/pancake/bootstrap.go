@@ -25,6 +25,7 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -160,6 +161,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 	flagSet := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { flagSet[f.Name] = true })
 
+	var orch OrchArgs
 	if recipePath != "" {
 		r, err := recipe.Load(recipePath)
 		if err != nil {
@@ -170,6 +172,13 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			sshHostKeys, sshAuthKeys, pancakeBin, pancakedBin, srcRoot,
 			image, initramfsPath, kernel, bzimage, bzimageOut,
 			efiOut, cmdline, signKey, signCert)
+		orch = OrchArgs{
+			StepCARoot:   r.Orchestrator.StepCARoot,
+			AhkcidRoot:   r.Orchestrator.AhkcidRoot,
+			ClientCARoot: r.Orchestrator.ClientCARoot,
+			CAURL:        r.Orchestrator.CAURL,
+			AttestCAURL:  r.Orchestrator.AttestCAURL,
+		}
 	}
 
 	// Sentinel kernel versions: "tree" / "local" mean "read it out of
@@ -225,6 +234,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		SignCert:        *signCert,
 		PancakedBin:     *pancakedBin,
 		BuilderAddr:     *builder,
+		Orch:            orch,
 	}); err != nil {
 		return die(err)
 	}
@@ -384,6 +394,33 @@ type bootstrapArgs struct {
 	// building to this pancake-build-server over gRPC. See
 	// bootstrap_builder.go for the alternate code path.
 	BuilderAddr string
+
+	// Orch: orchestrator-side trust anchors + URLs. When all required
+	// fields are set, bootstrap builds a `pancake-orch-config` verity
+	// layer carrying the CA roots + a JSON config readable by `pancake
+	// enroll` and `pancaked` at /etc/pancake/orch/. Empty struct skips
+	// the layer (Slice 1 fallback path).
+	Orch OrchArgs
+}
+
+// OrchArgs mirrors recipe.Orchestrator. Pulled out into its own
+// struct so cmd/pancake/bootstrap.go can pass it down to
+// packOrchConfigLayer without dragging recipe imports through every
+// helper.
+type OrchArgs struct {
+	StepCARoot   string
+	AhkcidRoot   string
+	ClientCARoot string
+	CAURL        string
+	AttestCAURL  string
+}
+
+// hasAll returns true when every required field is populated. The
+// orch-config layer is only built when this is true; otherwise the
+// VM falls back to the Slice 1 path (manually-delivered certs).
+func (o OrchArgs) hasAll() bool {
+	return o.StepCARoot != "" && o.AhkcidRoot != "" &&
+		o.ClientCARoot != "" && o.CAURL != "" && o.AttestCAURL != ""
 }
 
 func bootstrap(a bootstrapArgs) error {
@@ -587,6 +624,18 @@ func bootstrap(a bootstrapArgs) error {
 		}
 	}
 
+	// Synthetic pancake-orch-config layer: orchestrator-side trust
+	// anchors + ACME URLs. Per-deployment (same across every VM in
+	// the fleet, varies by orchestrator). No-op when the recipe's
+	// [orchestrator] section is empty (Slice 1 fallback).
+	{
+		var err error
+		layers, err = packOrchConfigLayer(tmp, repo, layers, a)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Overlay order: leaves (most-specific) first, base last.
 	// pancake-host at the very top so its hostname / ssh keys win over
 	// anything else (e.g. base-files' /etc/hostname). pancake-state
@@ -603,7 +652,7 @@ func bootstrap(a bootstrapArgs) error {
 	depFirst := topologicalOrder(pkgs, sandboxDir)
 	var overlay []laidOut
 	for _, name := range []string{
-		"pancake-host",
+		"pancake-host", "pancake-orch-config",
 		"pancake-state", "pancaked",
 		"pancake-kernel", "pancake-modules",
 	} {
@@ -962,6 +1011,108 @@ WantedBy=multi-user.target
 		return layers, err
 	}
 	layers = append(layers, laidOut{"pancaked", "1.0.0", "all", "pancaked"})
+	return layers, nil
+}
+
+// packOrchConfigLayer bakes the orchestrator-side trust anchors and
+// URLs into a signed verity layer mounted at /etc/pancake/orch/ in
+// the running VM. Contents:
+//
+//   /etc/pancake/orch/config.json
+//       {ca_url, attest_ca_url, step_ca_root, ahkcid_root, client_ca_root}
+//       — paths in the JSON are absolute paths INSIDE the VM, not
+//       on the build host.
+//   /etc/pancake/orch/step-ca-root.crt    PEM, the ACME server's TLS root
+//   /etc/pancake/orch/ahkcid-root.crt     PEM, the Attestation CA's TLS root
+//   /etc/pancake/orch/client-ca-root.crt  PEM, the CA whose client certs
+//                                          pancaked accepts on incoming mTLS
+//
+// `pancake enroll` reads config.json and uses these paths directly;
+// `pancaked` reads /etc/pancake/orch/client-ca-root.crt for its
+// gRPC client-cert trust pool. No flag plumbing required at runtime.
+//
+// No-op when the recipe omits the [orchestrator] section. Caller
+// guards on a.Orch.hasAll().
+func packOrchConfigLayer(tmp, repo string, layers []laidOut, a bootstrapArgs) ([]laidOut, error) {
+	if !a.Orch.hasAll() {
+		return layers, nil
+	}
+	fmt.Fprintln(os.Stderr,
+		"\n[bootstrap] packing pancake-orch-config layer (CA roots + URLs)")
+
+	staging := filepath.Join(tmp, "_pancake-orch-config")
+	orchDir := filepath.Join(staging, "etc/pancake/orch")
+	if err := os.MkdirAll(orchDir, 0o755); err != nil {
+		return layers, err
+	}
+
+	// Copy the three PEM files into the layer staging.
+	type copyJob struct{ src, dstName string }
+	jobs := []copyJob{
+		{a.Orch.StepCARoot, "step-ca-root.crt"},
+		{a.Orch.AhkcidRoot, "ahkcid-root.crt"},
+		{a.Orch.ClientCARoot, "client-ca-root.crt"},
+	}
+	for _, j := range jobs {
+		dst := filepath.Join(orchDir, j.dstName)
+		if err := copyFileLocal(j.src, dst); err != nil {
+			return layers, fmt.Errorf("copy %s → %s: %w", j.src, dst, err)
+		}
+		if err := os.Chmod(dst, 0o644); err != nil {
+			return layers, err
+		}
+	}
+
+	// Config.json — paths are absolute inside the running VM.
+	cfg := struct {
+		CAURL          string `json:"ca_url"`
+		AttestCAURL    string `json:"attest_ca_url"`
+		StepCARoot     string `json:"step_ca_root"`
+		AhkcidRoot     string `json:"ahkcid_root"`
+		ClientCARoot   string `json:"client_ca_root"`
+	}{
+		CAURL:        a.Orch.CAURL,
+		AttestCAURL:  a.Orch.AttestCAURL,
+		StepCARoot:   "/etc/pancake/orch/step-ca-root.crt",
+		AhkcidRoot:   "/etc/pancake/orch/ahkcid-root.crt",
+		ClientCARoot: "/etc/pancake/orch/client-ca-root.crt",
+	}
+	cfgBytes, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return layers, err
+	}
+	if err := os.WriteFile(filepath.Join(orchDir, "config.json"),
+		append(cfgBytes, '\n'), 0o644); err != nil {
+		return layers, err
+	}
+
+	pkgDir := filepath.Join(repo, "pancake-orch-config")
+	if _, err := os.Stat(pkgDir); err == nil {
+		_ = runner.Run(runner.Cmd{
+			Argv: []string{"rm", "-rf", pkgDir}, Sudo: true,
+		})
+	}
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		return layers, err
+	}
+	roothash, dataSize, err := layer.MakeVerity(staging,
+		filepath.Join(pkgDir, "image.img"),
+		"pancake-orch-config", 0, "pancake-orch-config")
+	if err != nil {
+		return layers, err
+	}
+	if err := kit.WritePackageManifest(pkgDir, kit.PackageManifest{
+		Package: kit.PackageBlock{
+			Name: "pancake-orch-config", Version: "1.0.0", Arch: "all",
+			Description: "orchestrator trust anchors + ACME URLs " +
+				"(per-deployment; baked at bootstrap)",
+		},
+		Image: kit.ImageBlock{DataSize: dataSize, Roothash: roothash},
+	}); err != nil {
+		return layers, err
+	}
+	layers = append(layers, laidOut{
+		"pancake-orch-config", "1.0.0", "all", "pancake-orch-config"})
 	return layers, nil
 }
 

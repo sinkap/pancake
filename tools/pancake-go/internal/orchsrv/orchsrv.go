@@ -9,7 +9,6 @@ package orchsrv
 
 import (
 	"context"
-	"crypto/subtle"
 	"fmt"
 	"net"
 	"os"
@@ -22,13 +21,14 @@ import (
 	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/layer"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/pkitls"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/sandbox"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -36,20 +36,25 @@ import (
 // into pancake-state, and where pancaked looks for it by default.
 const DefaultPubKeyPath = "/etc/pancake/manifest.pubkey"
 
-// DefaultSealedTokenPath is where pancake enroll writes the systemd-creds
-// blob, and where pancaked looks for it by default if --tpm-token is
-// passed without a value.
-const DefaultSealedTokenPath = "/etc/pancake/orch-token.creds"
-
-// Opts is what cmd/pancaked passes to Serve. Keep small + boring; flag
-// parsing lives in main.
+// Opts is what cmd/pancaked passes to Serve. Keep small + boring;
+// flag parsing lives in main.
 type Opts struct {
-	Kit          *kit.Kit
-	Listen       string // address:port for gRPC listener
-	PubKey       string // PEM PKIX public key path
-	TokenFile    string // plaintext bearer token file (optional)
-	TPMTokenFile string // systemd-creds-sealed token file (optional, mutually
-	// exclusive with TokenFile)
+	Kit    *kit.Kit
+	Listen string // address:port for gRPC listener
+	PubKey string // PEM PKIX public key path
+
+	// mTLS — the only transport auth pancaked supports. When all
+	// three are set, pancaked listens on TLS and requires a peer
+	// client cert signed by CAFile. KeyFile is either a PEM
+	// PKCS#8 file (Slice 1, static CA) or "" + KeyMarkerFile set
+	// (Slice 2, TPM-resident key resolved via internal/tpmkey).
+	// When unset entirely, pancaked listens on plain TCP and
+	// manifest signature is the only integrity gate.
+	CAFile        string // PEM root cert
+	CertFile      string // PEM server-auth leaf cert
+	KeyFile       string // PEM PKCS#8 private key (mutually excl. with KeyMarkerFile)
+	KeyMarkerFile string // TPM key marker JSON (Slice 2)
+
 	// Builder is the address (host:port) of a pancake-build-server.
 	// When set, missing-layer fetches in Update() pull bytes from
 	// the build server's GetLayer instead of trying the in-VM
@@ -66,8 +71,8 @@ func Serve(o Opts) error {
 	if o.PubKey == "" {
 		o.PubKey = DefaultPubKeyPath
 	}
-	if o.TokenFile != "" && o.TPMTokenFile != "" {
-		return fmt.Errorf("orchsrv: TokenFile and TPMTokenFile are mutually exclusive")
+	if o.KeyFile != "" && o.KeyMarkerFile != "" {
+		return fmt.Errorf("orchsrv: KeyFile and KeyMarkerFile are mutually exclusive")
 	}
 	if _, err := os.Stat(o.PubKey); err != nil {
 		return fmt.Errorf("pubkey not found at %s — was the kit "+
@@ -75,23 +80,6 @@ func Serve(o Opts) error {
 	}
 
 	srv := &server{k: o.Kit, pubkey: o.PubKey}
-	switch {
-	case o.TokenFile != "":
-		b, err := os.ReadFile(o.TokenFile)
-		if err != nil {
-			return fmt.Errorf("read token-file: %w", err)
-		}
-		srv.token = strings.TrimSpace(string(b))
-	case o.TPMTokenFile != "":
-		t, err := LoadSealedToken(o.TPMTokenFile)
-		if err != nil {
-			return fmt.Errorf("unseal token: %w "+
-				"(boot chain mismatch? re-run `pancake enroll`)", err)
-		}
-		srv.token = t
-		fmt.Fprintln(os.Stderr,
-			"[pancaked] auth token unsealed from TPM (PCR-bound to current boot chain)")
-	}
 
 	// Provision per-boot attestation context (AK + EK). Soft-fails on
 	// no-TPM systems; the daemon still serves Update / GetCurrentManifest.
@@ -123,12 +111,35 @@ func Serve(o Opts) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", o.Listen, err)
 	}
-	g := grpc.NewServer(grpc.UnaryInterceptor(srv.authInterceptor))
+
+	srvOpts := []grpc.ServerOption{}
+	authMode := "unauthenticated"
+	switch {
+	case o.CAFile != "" && o.CertFile != "" && o.KeyMarkerFile != "":
+		cfg, err := pkitls.LoadServerConfigTPM(
+			o.CertFile, o.KeyMarkerFile, o.CAFile)
+		if err != nil {
+			return fmt.Errorf("mTLS (TPM key): %w", err)
+		}
+		srvOpts = append(srvOpts, grpc.Creds(credentials.NewTLS(cfg)))
+		authMode = "mTLS (TPM-resident key, client cert required)"
+	case o.CAFile != "" && o.CertFile != "" && o.KeyFile != "":
+		cfg, err := pkitls.LoadServerConfig(o.CertFile, o.KeyFile, o.CAFile)
+		if err != nil {
+			return fmt.Errorf("mTLS (PEM key): %w", err)
+		}
+		srvOpts = append(srvOpts, grpc.Creds(credentials.NewTLS(cfg)))
+		authMode = "mTLS (PEM key, client cert required)"
+	case o.CAFile != "" || o.CertFile != "" || o.KeyFile != "" || o.KeyMarkerFile != "":
+		return fmt.Errorf("mTLS: need --ca-file + --cert-file + " +
+			"(--key-file OR --tpm-key-marker); got partial")
+	}
+
+	g := grpc.NewServer(srvOpts...)
 	orchpb.RegisterPancakeServer(g, srv)
 
 	fmt.Fprintf(os.Stderr,
-		"[pancaked] gRPC listening on %s (auth=%t)\n",
-		o.Listen, srv.token != "")
+		"[pancaked] gRPC listening on %s (auth: %s)\n", o.Listen, authMode)
 	return g.Serve(lis)
 }
 
@@ -137,26 +148,9 @@ type server struct {
 	orchpb.UnimplementedPancakeServer
 	k             *kit.Kit
 	pubkey        string
-	token         string       // empty = no auth
 	attest        *attestState // nil = no TPM, Attest RPC returns Unavailable
 	builderAddr   string
 	builderClient buildpb.PancakeBuilderClient // nil = no auto-fetch
-}
-
-func (s *server) authInterceptor(ctx context.Context, req any,
-	_ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	if s.token == "" {
-		return handler(ctx, req)
-	}
-	md, _ := metadata.FromIncomingContext(ctx)
-	got := ""
-	if vs := md.Get("authorization"); len(vs) > 0 {
-		got = strings.TrimPrefix(vs[0], "Bearer ")
-	}
-	if subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
-		return nil, status.Error(codes.Unauthenticated, "bad bearer token")
-	}
-	return handler(ctx, req)
 }
 
 // GetCurrentManifest returns whatever generation `current` points at.
@@ -523,17 +517,3 @@ func buildMissingLayers(k *kit.Kit, missing []kit.LayerRef,
 	return nil
 }
 
-// LoadSealedToken decrypts a systemd-creds-sealed token blob via the TPM.
-// The PCR policy bound at enrollment time must match current PCR values
-// or the unseal fails.
-func LoadSealedToken(path string) (string, error) {
-	out, err := runner.Capture(runner.Cmd{
-		Argv: []string{"systemd-creds", "decrypt",
-			"--name=pancake-orch-token", path, "-"},
-		Sudo: true,
-	})
-	if err != nil {
-		return "", fmt.Errorf("systemd-creds decrypt %s: %w", path, err)
-	}
-	return strings.TrimSpace(out), nil
-}

@@ -72,6 +72,21 @@ RECIPE="$WORK/recipe.toml"
 CONTAINER=pancake-build-server-demo
 CACHE_VOL=pancake-build-cache-demo
 
+# mTLS demo material (Slice 1 of the bearer-token replacement). The
+# orchestrator host owns ca.{crt,key}; the VM gets ca.crt + per-VM
+# server.{crt,key} dropped into /etc/pancake/ via SSH; the host gets
+# its own client.{crt,key} signed by the same CA.
+CA_DIR="$WORK/ca"
+SERVER_CERT="$WORK/server.crt"
+SERVER_KEY="$WORK/server.key"
+CLIENT_CERT="$WORK/client.crt"
+CLIENT_KEY="$WORK/client.key"
+
+# step-ca container (Slice 2 — TPM-attested cert issuance via ACME).
+CA_CONTAINER=pancake-ca-server-demo
+CA_VOLUME=pancake-ca-state-demo
+CA_PORT=8443
+
 say() { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
 
 # ---------- preflight ----------------------------------------------
@@ -92,7 +107,7 @@ PANCAKE="$PANCAKE_GO/bin/pancake"
 # ---------- tear down previous run ---------------------------------
 say "tearing down previous demo state"
 sudo kill "$(sudo cat "$VM_PID" 2>/dev/null)" 2>/dev/null || true
-docker rm -f "$CONTAINER" 2>/dev/null || true
+docker rm -f "$CONTAINER" "$CA_CONTAINER" pancake-ahkcid-demo 2>/dev/null || true
 SWTPM_PIDS=$(pgrep -f "swtpm.*pancake-demo" 2>/dev/null | head -3 || true)
 if [ -n "$SWTPM_PIDS" ]; then sudo kill $SWTPM_PIDS 2>/dev/null || true; fi
 sudo rm -rf "$WORK" "$SWTPM_STATE" "$SWTPM_SOCK"
@@ -115,36 +130,70 @@ for i in 1 2 3 4 5; do
     sleep 1
 done
 
+# ---------- step-ca container (Slice 2) ----------------------------
+# Stand up the CA that will issue TPM-attested mTLS certs to the
+# VM. State volume survives demo re-runs by default; nuke with
+# `pancake ca-server down --purge-volume` if you want a fresh CA.
+say "start pancake-ca-server (step-ca, port $CA_PORT)"
+"$PANCAKE" ca-server up \
+    --repo "$REPO" \
+    --container "$CA_CONTAINER" \
+    --image pancake-ca-server-demo \
+    --volume "$CA_VOLUME" \
+    --port "$CA_PORT" \
+    --dns "localhost,127.0.0.1" \
+    --name "pancake-demo-ca" 2>&1 | sed 's/^/  /'
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    nc -z localhost "$CA_PORT" 2>/dev/null && break
+    sleep 1
+done
+"$PANCAKE" ca-server status \
+    --container "$CA_CONTAINER" --port "$CA_PORT" 2>&1 | sed 's/^/  /'
+
+# ---------- attestation CA (ahkcid) container ----------------------
+# Stand up ahkcid BEFORE bootstrap so we can pull its root cert and
+# bake it into the pancake-orch-config verity layer along with the
+# step-ca root. This kills the post-boot scp of trust anchors.
+AHKCID_CONTAINER=pancake-ahkcid-demo
+AHKCID_VOLUME=pancake-ahkcid-state-demo
+AHKCID_PORT=8444
+
+say "build + start pancake-ahkcid (attestation CA, port $AHKCID_PORT)"
+docker rm -f "$AHKCID_CONTAINER" 2>/dev/null
+docker volume inspect "$AHKCID_VOLUME" >/dev/null 2>&1 || docker volume create "$AHKCID_VOLUME"
+docker build -f "$PANCAKE_GO/ahkcid/Dockerfile" \
+    -t pancake-ahkcid-demo "$PANCAKE_GO" 2>&1 | tail -3 | sed 's/^/  /'
+docker run -d --name "$AHKCID_CONTAINER" \
+    -p "$AHKCID_PORT:8444" \
+    -v "$AHKCID_VOLUME:/home/ahkcid" \
+    pancake-ahkcid-demo >/dev/null
+for i in 1 2 3 4 5 6 7 8; do
+    nc -z localhost "$AHKCID_PORT" 2>/dev/null && break
+    sleep 1
+done
+
+say "register ahkcid root with step-ca (its ACME-tpm provisioner trusts ahkcid AK certs)"
+curl -ks "https://localhost:$AHKCID_PORT/root.crt" > "$WORK/ahkcid-root.crt"
+"$PANCAKE" ca-server trust-roots \
+    --container "$CA_CONTAINER" \
+    --roots "$WORK/ahkcid-root.crt" 2>&1 | sed 's/^/  /'
+
+say "pull step-ca root for orch-config layer"
+docker exec "$CA_CONTAINER" cat /home/step/certs/root_ca.crt > "$WORK/step-ca-root.crt"
+
+say "mint orchestrator client-CA (signs the cert pancake orchestrate presents)"
+"$PANCAKE" ca init --dir "$CA_DIR" --cn pancake-demo-orch-ca 2>&1 | sed 's/^/  /'
+"$PANCAKE" ca issue --ca-dir "$CA_DIR" \
+    --cn pancake-demo-orchestrator \
+    --out-cert "$CLIENT_CERT" --out-key "$CLIENT_KEY" 2>&1 | sed 's/^/  /'
+
 # ---------- recipe + bootstrap -------------------------------------
-say "write recipe → $RECIPE"
-cat > "$RECIPE" <<EOF
-output   = "$KIT"
-hostname = "pancake-demo"
-packages = ["openssh-server", "chrony", "nano"]
-
-[distro]
-suite = "noble"
-
-[ssh]
-authorized-keys = "$AUTH_KEY"
-
-[kernel]
-version = "tree"
-bzimage = "$BZIMAGE"
-
-[outputs]
-image     = ""
-initramfs = "$INITRAMFS"
-bzimage   = "$BZ_OUT"
-efi       = "$EFI_IMG"
-
-[signing]
-key  = "$KEY"
-cert = "$CERT"
-
-[advanced]
-src-root = "$REPO"
-EOF
+# Recipe lives in demo/recipe.toml.template with ${VAR} placeholders;
+# envsubst materializes it at $RECIPE with the current shell env.
+say "write recipe → $RECIPE (from recipe.toml.template)"
+export KIT BZIMAGE INITRAMFS BZ_OUT EFI_IMG KEY CERT REPO AUTH_KEY \
+       WORK CA_DIR CA_PORT AHKCID_PORT
+envsubst < "$REPO/demo/recipe.toml.template" > "$RECIPE"
 
 say "bootstrap kit via build server (this runs mmdebstrap server-side, ~3 min cold)"
 sudo "$PANCAKE" bootstrap --builder=localhost:"$GRPC_PORT" "$RECIPE" \
@@ -220,12 +269,23 @@ if [ "$SKIP_ATTEST" = 1 ]; then
     exit 0
 fi
 
-# ---------- enroll inside VM ---------------------------------------
-say "pancake enroll inside VM (seal token + export EK)"
+# ---------- enroll inside VM (zero-touch) --------------------------
+# Trust anchors + URLs are baked into the pancake-orch-config layer
+# at bootstrap time, so enroll has zero required flags. We pass
+# --san to control the cert SAN; everything else comes from
+# /etc/pancake/orch/config.json inside the VM.
+say "pancake enroll inside VM (URLs/roots from baked layer)"
 ssh $SSH_OPTS -p "$SSH_PORT" root@localhost \
-    "pancake enroll 2>&1 | tail -20" | sed 's/^/  /'
+    "pancake enroll \
+        --san=DNS:localhost,IP:127.0.0.1 \
+        --device-id=pancake-demo-vm 2>&1 | tail -12" | sed 's/^/  /'
 ssh $SSH_OPTS -p "$SSH_PORT" root@localhost "cat /etc/pancake/ek.pub" > "$EK_PUB"
 echo "  EK pulled to host: $EK_PUB ($(wc -c < "$EK_PUB") bytes)"
+
+say "restart pancaked (auto-detects TPM marker + layer-baked client CA)"
+ssh $SSH_OPTS -p "$SSH_PORT" root@localhost \
+    "systemctl restart pancaked && sleep 1 && \
+     journalctl -u pancaked -n 6 --no-pager" 2>&1 | sed 's/^/  /'
 
 # ---------- attest from host ---------------------------------------
 ATTEST_MODE=tpm
@@ -237,6 +297,21 @@ sudo "$PANCAKE" attest \
     --kit="$KIT" \
     --gen=1 \
     --mode="$ATTEST_MODE" 2>&1 | sed 's/^/  /'
+
+say "pancake orchestrate get-current under mTLS (TPM-backed server key)"
+"$PANCAKE" orchestrate get-current \
+    --target=localhost:"$GRPC_PORT" \
+    --ca-file="$WORK/step-ca-root.crt" \
+    --cert-file="$CLIENT_CERT" \
+    --key-file="$CLIENT_KEY" 2>&1 | sed 's/^/  /'
+
+say "negative test: dialing without a client cert should fail"
+if "$PANCAKE" orchestrate get-current \
+    --target=localhost:"$GRPC_PORT" 2>&1 | sed 's/^/  /'; then
+    echo "  FAIL: unauthenticated dial succeeded against mTLS pancaked" >&2
+    exit 1
+fi
+say "  ok — pancaked refused the unauthenticated dial"
 
 say "demo done"
 echo "  artifacts:    $WORK"

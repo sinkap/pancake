@@ -11,6 +11,7 @@ import (
 
 	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmkey"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -20,24 +21,18 @@ import (
 // layer set (14) — enough for "is this VM running gen N?".
 var defaultPCRs = []int32{7, 11, 12, 13, 14}
 
-// ekHandle is the TCG TPM 2.0 EK Credential Profile-defined
-// persistent handle for the ECC EK. We expect `pancake enroll` to
-// have promoted the EK there once already (tpm2_evictcontrol),
-// so startup is a fast tpm2_readpublic instead of re-derivation.
-const ekHandle = "0x81010002"
-
 // attestState holds the per-boot TPM2 attestation context. Created
 // once at pancaked startup; lives in /run (tmpfs) so it disappears
 // on reboot, matching the per-boot AK lifecycle the verifier
 // expects.
 //
-// EK lifecycle: persistent at handle 0x81010002 (set up by
+// EK lifecycle: persistent at tpmkey.EKHandleECC (set up by
 // `pancake enroll` once per TPM). On first boot before enrollment,
 // we fall back to a transient EK via tpm2_createek so attestation
 // works pre-enroll; the daemon logs which path it took.
 type attestState struct {
 	dir    string // /run/pancake/attest
-	ekRef  string // either ekHandle ("0x81010002") or path to ek.ctx
+	ekRef  string // either tpmkey.EKHandleECC or path to ek.ctx
 	ekPub  []byte // contents of ek.pub — TPM2B_PUBLIC, exported via Attest
 	akCtx  string // .../ak.ctx — AK context blob (used by tpm2_quote)
 	akPub  []byte // contents of .../ak.pub — TPM2B_PUBLIC
@@ -92,12 +87,12 @@ func setupAttest() (*attestState, error) {
 	// would be mistaken for success.
 	readErr := runner.Run(runner.Cmd{
 		Argv: []string{"tpm2_readpublic",
-			"-c", ekHandle, "-o", ekPubPath},
+			"-c", tpmkey.EKHandleECC, "-o", ekPubPath},
 	})
 	if readErr == nil {
-		st.ekRef = ekHandle
+		st.ekRef = tpmkey.EKHandleECC
 		fmt.Fprintf(os.Stderr,
-			"[pancaked] EK loaded from persistent handle %s\n", ekHandle)
+			"[pancaked] EK loaded from persistent handle %s\n", tpmkey.EKHandleECC)
 	} else {
 		// Belt-and-braces: nuke any partial ek.pub the failed
 		// readpublic might have left behind.
@@ -118,7 +113,7 @@ func setupAttest() (*attestState, error) {
 		}
 		st.ekRef = ekCtx
 		fmt.Fprintln(os.Stderr,
-			"[pancaked] EK created transient (handle "+ekHandle+
+			"[pancaked] EK created transient (handle "+tpmkey.EKHandleECC+
 				" empty — run `pancake enroll` to persist)")
 	}
 

@@ -65,12 +65,27 @@ type Recipe struct {
 	Hostname string   `toml:"hostname"`
 	Packages []string `toml:"packages"`
 
-	Distro   Distro   `toml:"distro"`
-	SSH      SSH      `toml:"ssh"`
-	Kernel   Kernel   `toml:"kernel"`
-	Outputs  Outputs  `toml:"outputs"`
-	Signing  Signing  `toml:"signing"`
-	Advanced Advanced `toml:"advanced"`
+	Distro       Distro       `toml:"distro"`
+	SSH          SSH          `toml:"ssh"`
+	Kernel       Kernel       `toml:"kernel"`
+	Outputs      Outputs      `toml:"outputs"`
+	Signing      Signing      `toml:"signing"`
+	Advanced     Advanced     `toml:"advanced"`
+	Orchestrator Orchestrator `toml:"orchestrator"`
+}
+
+// Orchestrator carries the trust anchors + URLs the in-VM
+// `pancake enroll` and `pancaked` need to talk to the orchestrator.
+// All five fields baked into a signed verity layer at bootstrap
+// time and mounted read-only at /etc/pancake/orch/ in the running
+// VM. Empty section = no orch-config layer is built (Slice 1
+// fallback: VM accepts manual cert delivery).
+type Orchestrator struct {
+	StepCARoot   string `toml:"step-ca-root"`
+	AhkcidRoot   string `toml:"ahkcid-root"`
+	ClientCARoot string `toml:"client-ca-root"`
+	CAURL        string `toml:"ca-url"`
+	AttestCAURL  string `toml:"attest-ca-url"`
 }
 
 type Distro struct {
@@ -140,6 +155,8 @@ func (r *Recipe) expandPaths() {
 		&r.Outputs.Image, &r.Outputs.Initramfs, &r.Outputs.BzImage, &r.Outputs.EFI,
 		&r.Signing.Key, &r.Signing.Cert,
 		&r.Advanced.SrcRoot, &r.Advanced.PancakeBin, &r.Advanced.PancakedBin,
+		&r.Orchestrator.StepCARoot, &r.Orchestrator.AhkcidRoot,
+		&r.Orchestrator.ClientCARoot,
 	} {
 		*p = ExpandPath(*p)
 	}

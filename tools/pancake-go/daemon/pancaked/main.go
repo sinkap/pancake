@@ -8,19 +8,22 @@
 //
 // Defaults:
 //
-//	--listen      :7878
-//	--kit         /var/lib/pancake
-//	--pubkey      /etc/pancake/manifest.pubkey
-//	--token-file  (none)
-//	--tpm-token   (none; if set without value, /etc/pancake/orch-token.creds)
+//	--listen           :7878
+//	--kit              /var/lib/pancake
+//	--pubkey           /etc/pancake/manifest.pubkey
+//	--ca-file          (auto: /etc/pancake/ca.crt        if present)
+//	--cert-file        (auto: /etc/pancake/server.crt    if present)
+//	--key-file         (auto: /etc/pancake/server.key    if present)
+//	--tpm-key-marker   (auto: /etc/pancake/server.tpmkey if present)
 //
 // Auth model:
-//   - Neither --token-file nor --tpm-token  →  unauthenticated. Manifest
-//     signature is still the integrity floor.
-//   - --token-file F                        →  bearer = file content.
-//   - --tpm-token [F]                       →  bearer = systemd-creds
-//     decryption of F (defaults to /etc/pancake/orch-token.creds);
-//     PCR mismatch → daemon refuses to start.
+//   - --ca-file + --cert-file + --tpm-key-marker  →  mTLS, TPM-resident
+//     server key (Slice 2 ACME-tpm flow). Preferred path.
+//   - --ca-file + --cert-file + --key-file        →  mTLS, on-disk PEM
+//     PKCS#8 server key (Slice 1, static-CA flow).
+//   - none of the above                            →  unauthenticated
+//     transport. Manifest signature is still the integrity floor.
+
 package main
 
 import (
@@ -32,20 +35,38 @@ import (
 	"github.com/sinkap/pancake/tools/pancake-go/internal/orchsrv"
 )
 
+const (
+	// defaultOrchCAFile: client-cert trust root baked into the
+	// signed pancake-orch-config verity layer at bootstrap time.
+	// Preferred over defaultCAFile, which is the legacy Slice 1
+	// path where the operator scp'd a cert post-boot.
+	defaultOrchCAFile   = "/etc/pancake/orch/client-ca-root.crt"
+	defaultCAFile       = "/etc/pancake/ca.crt"
+	defaultCertFile     = "/etc/pancake/server.crt"
+	defaultKeyFile      = "/etc/pancake/server.key"
+	defaultTPMKeyMarker = "/etc/pancake/server.tpmkey"
+)
+
 func main() {
 	listen := flag.String("listen", ":7878", "address:port for gRPC listener")
 	kitDir := flag.String("kit", "/var/lib/pancake",
 		"path to the pancake kit directory")
 	pubkey := flag.String("pubkey", orchsrv.DefaultPubKeyPath,
 		"PEM PKIX public key for verifying pushed manifests")
-	tokenFile := flag.String("token-file", "",
-		"plaintext bearer-token file; clients must send the same value as "+
-			"metadata['authorization'] = \"Bearer <token>\". Empty disables auth.")
-	tpmToken := flag.String("tpm-token", "",
-		"systemd-creds-sealed bearer-token blob. Decrypts at startup via "+
-			"TPM PCR 7+11; mismatched boot chain → refuse to start. "+
-			"Pass an explicit path or use the implicit default by setting "+
-			"--tpm-token=auto. Mutually exclusive with --token-file.")
+	caFile := flag.String("ca-file", "",
+		"PEM root CA that signed the orchestrator's client cert. "+
+			"When unset, defaults to "+defaultCAFile+" if it exists.")
+	certFile := flag.String("cert-file", "",
+		"PEM server-auth leaf cert. When unset, defaults to "+
+			defaultCertFile+" if it exists.")
+	keyFile := flag.String("key-file", "",
+		"PKCS#8 PEM private key for --cert-file. When unset, "+
+			"defaults to "+defaultKeyFile+" if it exists. Mutually "+
+			"exclusive with --tpm-key-marker.")
+	tpmKeyMarker := flag.String("tpm-key-marker", "",
+		"JSON marker (storage_dir + ak_name + key_name) pointing at "+
+			"a TPM-resident key from `pancake enroll`. When unset, "+
+			"defaults to "+defaultTPMKeyMarker+" if it exists.")
 	builder := flag.String("builder", "",
 		"address (host:port) of a pancake-build-server. When set, "+
 			"Update auto-fetches missing layers via GetLayer instead "+
@@ -54,23 +75,38 @@ func main() {
 			"the layer. Empty disables auto-fetch.")
 	flag.Parse()
 
-	if *tpmToken == "auto" {
-		// "auto" means "use the sealed file if it exists, otherwise run
-		// unauthenticated and log a warning". This lets the systemd unit
-		// shipped in the pancaked layer set --tpm-token=auto by default
-		// — first boot has no enrollment so pancaked still starts (just
-		// without auth); after `pancake enroll` and a daemon restart, it
-		// picks up the sealed token and gates incoming RPCs.
-		if _, err := os.Stat(orchsrv.DefaultSealedTokenPath); err == nil {
-			*tpmToken = orchsrv.DefaultSealedTokenPath
-		} else {
-			fmt.Fprintf(os.Stderr,
-				"pancaked: --tpm-token=auto but %s does not exist — "+
-					"running UNAUTHENTICATED. Run `pancake enroll` and "+
-					"restart pancaked to gate updates with a TPM-sealed token.\n",
-				orchsrv.DefaultSealedTokenPath)
-			*tpmToken = ""
+	// Auto-pick up the standard mTLS file locations. Prefer the
+	// TPM marker over a PEM key when both exist (Slice 2 over
+	// Slice 1) — the TPM-bound key is the going-forward path.
+	// For the client-cert CA, prefer the layer-baked path
+	// (verity-protected, signed) over the writable /etc/pancake
+	// fallback (Slice 1 SSH-delivered).
+	if *caFile == "" {
+		if _, err := os.Stat(defaultOrchCAFile); err == nil {
+			*caFile = defaultOrchCAFile
+		} else if _, err := os.Stat(defaultCAFile); err == nil {
+			*caFile = defaultCAFile
 		}
+	}
+	if *certFile == "" {
+		if _, err := os.Stat(defaultCertFile); err == nil {
+			*certFile = defaultCertFile
+		}
+	}
+	if *tpmKeyMarker == "" && *keyFile == "" {
+		if _, err := os.Stat(defaultTPMKeyMarker); err == nil {
+			*tpmKeyMarker = defaultTPMKeyMarker
+		} else if _, err := os.Stat(defaultKeyFile); err == nil {
+			*keyFile = defaultKeyFile
+		}
+	}
+	if *caFile != "" && *certFile != "" && (*keyFile != "" || *tpmKeyMarker != "") {
+		mode := "PEM key"
+		if *tpmKeyMarker != "" {
+			mode = "TPM marker"
+		}
+		fmt.Fprintf(os.Stderr,
+			"pancaked: mTLS auto-detected (%s)\n", mode)
 	}
 
 	k, err := kit.Open(*kitDir)
@@ -79,12 +115,14 @@ func main() {
 		os.Exit(1)
 	}
 	if err := orchsrv.Serve(orchsrv.Opts{
-		Kit:          k,
-		Listen:       *listen,
-		PubKey:       *pubkey,
-		TokenFile:    *tokenFile,
-		TPMTokenFile: *tpmToken,
-		Builder:      *builder,
+		Kit:           k,
+		Listen:        *listen,
+		PubKey:        *pubkey,
+		CAFile:        *caFile,
+		CertFile:      *certFile,
+		KeyFile:       *keyFile,
+		KeyMarkerFile: *tpmKeyMarker,
+		Builder:       *builder,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "pancaked: %v\n", err)
 		os.Exit(1)

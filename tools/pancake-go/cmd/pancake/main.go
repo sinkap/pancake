@@ -42,6 +42,9 @@ modify (in-VM only — operate on the running pancake-os):
 orchestrator (build/admin host):
   orchestrate get-current  ask a VM what manifest it's running
   orchestrate push         push a signed manifest from a kit to a VM
+  ca init / ca issue       mint a static CA + leaf certs (Slice 1, dev only)
+  ca-server up/status/...  manage the step-ca container that issues TPM-
+                           attested mTLS certs to enrolled VMs (Slice 2)
 
 Default --kit is /var/lib/pancake (the in-system path). For host-side use
 point it at the kit directory you built with bootstrap.`)
@@ -67,12 +70,13 @@ func main() {
 		return
 	}
 
-	// `bootstrap`, `build`, and `orchestrate` operate on free-standing
-	// paths, not on a pre-existing in-VM kit, so we don't pre-validate
-	// the global --kit dir for them.
+	// `bootstrap`, `build`, `orchestrate`, `attest`, `ca`, `ca-server`,
+	// and `enroll` operate on free-standing paths (TPM + filesystem
+	// only), not on a pre-existing in-VM kit, so we don't pre-validate
+	// --kit for them.
 	var k *kit.Kit
 	switch sub {
-	case "bootstrap", "build", "orchestrate", "attest":
+	case "bootstrap", "build", "orchestrate", "attest", "ca", "ca-server", "enroll":
 		// nil kit; subcommand owns its own paths
 	default:
 		var err error
@@ -109,6 +113,10 @@ func main() {
 		rc = cmdOrchestrate(k, args)
 	case "attest":
 		rc = cmdAttest(k, args)
+	case "ca":
+		rc = cmdCA(k, args)
+	case "ca-server":
+		rc = cmdCAServer(k, args)
 	default:
 		fmt.Fprintf(os.Stderr, "pancake: unknown subcommand %q\n", sub)
 		usage()

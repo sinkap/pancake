@@ -1,46 +1,79 @@
-// `pancake enroll`: bind the orchestrator-update auth token to this VM's
-// boot chain via TPM PCR sealing.
+// `pancake enroll`: bind this VM's identity to its TPM and obtain a
+// pancaked TLS cert from pancake-ca-server via ACME-tpm.
 //
-// Generates a 256-bit random bearer token, encrypts it via systemd-creds
-// against PCR 7 (UEFI Secure Boot policy) + PCR 11 (UKI sections — kernel
-// + initrd + cmdline), writes the sealed blob to
-// /etc/pancake/orch-token.creds, and prints the plaintext for the
-// operator to copy to their orchestrator config.
+// Two independent things happen here:
 //
-// Subsequent `pancake serve` invocations decrypt the blob at startup. If
-// the kernel/initrd/cmdline gets swapped, PCR 11 differs from what was
-// sealed against → systemd-creds decrypt fails → serve refuses to start
-// → no updates can land. That's the whole point: tamper detection
-// gating remote control.
+//   (a) EK export — the TPM endorsement key public area is read out
+//       (or created if missing), promoted to the TCG-canonical ECC
+//       persistent handle (tpmkey.EKHandleECC), and written to
+//       /etc/pancake/ek.pub. This is what `pancake attest` uses to
+//       identify the TPM remotely.
 //
-// Re-enroll is required after any boot-chain change (e.g., a `pancake
-// swap` that brings up a new kernel/initrd). For real fleets this is a
-// one-time setup; in development, expect to re-enroll occasionally.
+//   (b) ACME-tpm enrollment — mint an Attestation Key (AK) and a new
+//       TPM-resident TLS signing key, attest the latter via the AK
+//       (qualifying-data = SHA256 of the ACME key authorization), POST
+//       a CBOR/WebAuthn-format "tpm" attestation statement to the
+//       step-ca ACME challenge URL, finalize the order, and write
+//       the resulting cert chain to /etc/pancake/server.crt. The
+//       signing key never leaves the TPM; pancaked loads it via
+//       go.step.sm/crypto/tpm at startup.
+//
+// Re-running enroll mints a fresh TPM-resident TLS key (the qualifying
+// data binds the attestation to a specific ACME order, so each
+// enrollment needs a distinct key) but reuses the AK and ACME account
+// key.
+//
+// The bearer-token sealing path (the previous v1) is gone. Manifest
+// signature is still the integrity floor on the wire; mTLS is the
+// transport floor.
 
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmkey"
 )
 
 const (
-	defaultSealedTokenPath = "/etc/pancake/orch-token.creds"
+	defaultEKOut        = "/etc/pancake/ek.pub"
+	defaultServerCert   = "/etc/pancake/server.crt"
+	defaultTPMStore     = "/var/lib/pancake/tpm"
+	defaultTPMKeyMarker = "/etc/pancake/server.tpmkey"
+	defaultACMEAcctKey  = "/var/lib/pancake/acme-account.jwk"
 
-	// ekHandle is the TCG TPM 2.0 EK Credential Profile-defined
-	// persistent handle for the ECC EK (RSA EK lives at 0x81010001).
-	// Promoting our EK there once at enroll-time means every
-	// pancaked startup is just a tpm2_readpublic — no per-boot
-	// re-derivation via tpm2_createek.
-	ekHandle = "0x81010002"
+	// defaultOrchConfig: when present, pancake enroll reads its
+	// orchestrator URLs + CA roots from this JSON file (baked into
+	// the signed pancake-orch-config verity layer at bootstrap
+	// time). Flags still override individual fields.
+	defaultOrchConfig = "/etc/pancake/orch/config.json"
 )
+
+// orchConfig mirrors the JSON written by packOrchConfigLayer in
+// bootstrap.go. All paths are absolute paths inside the running VM.
+type orchConfig struct {
+	CAURL        string `json:"ca_url"`
+	AttestCAURL  string `json:"attest_ca_url"`
+	StepCARoot   string `json:"step_ca_root"`
+	AhkcidRoot   string `json:"ahkcid_root"`
+	ClientCARoot string `json:"client_ca_root"`
+}
+
+// tpmKeyMarker is the small JSON file pancaked reads at startup to
+// know how to load the TPM-resident TLS key.
+type tpmKeyMarker struct {
+	StorageDir string `json:"storage_dir"`
+	AKName     string `json:"ak_name"`
+	KeyName    string `json:"key_name"`
+}
 
 func fileExistsNonEmpty(p string) bool {
 	fi, err := os.Stat(p)
@@ -49,157 +82,212 @@ func fileExistsNonEmpty(p string) bool {
 
 func cmdEnroll(_ *kit.Kit, args []string) int {
 	fs := flag.NewFlagSet("enroll", flag.ContinueOnError)
-	pcrs := fs.String("pcrs", "7+11",
-		"TPM PCRs to seal the token against (passed to systemd-creds "+
-			"--tpm2-pcrs). Default 7+11 binds to Secure Boot policy + UKI "+
-			"sections; tampering with either causes unseal to fail.")
-	out := fs.String("out", defaultSealedTokenPath,
-		"path to write the sealed token blob")
-	tokenLen := fs.Int("bits", 256,
-		"random token entropy in bits")
-	ekOut := fs.String("ek-out", "/etc/pancake/ek.pub",
+	ekOut := fs.String("ek-out", defaultEKOut,
 		"path to write the TPM endorsement key public area (TPM2B_PUBLIC). "+
-			"This file identifies the host's TPM to the orchestrator and "+
-			"is what `pancake attest` compares against during verification. "+
-			"Ship this file to your orchestrator/attestation registry.")
+			"Used by `pancake attest` on the orchestrator to verify this "+
+			"VM's TPM identity.")
+
+	caURL := fs.String("ca-url", "",
+		"step-ca ACME directory URL, e.g. "+
+			"https://orchestrator:8443/acme/tpm/directory  (required unless --skip-acme)")
+	caRoot := fs.String("ca-root", "",
+		"PEM file containing the step-ca root cert, used to verify the "+
+			"ACME server's TLS. Get it from the orchestrator with "+
+			"`docker exec pancake-ca-server cat /home/step/certs/root_ca.crt`")
+	attestCAURL := fs.String("attest-ca-url", "",
+		"pancake-ahkcid base URL, e.g. https://orchestrator:8444 . "+
+			"When set, the AK is enrolled with this Attestation CA "+
+			"before the ACME flow so step-ca's x5c chain validation "+
+			"succeeds. Required for TPMs without manufacturer-signed "+
+			"AK certs (i.e., almost all of them).")
+	attestCARoot := fs.String("attest-ca-root", "",
+		"PEM file containing the ahkcid TLS root (--attest-ca-url's "+
+			"server cert chain).")
+	deviceID := fs.String("device-id", "",
+		"the leaf cert's CN. Defaults to the system hostname.")
+	sanList := fs.String("san", "",
+		"comma-separated list of SANs for the TLS cert. Each entry is "+
+			"either DNS:name or IP:addr (or a bare value, auto-classified). "+
+			"At least one is required — orchestrator's mTLS hostname check "+
+			"reads SAN, not CN.")
+
+	serverCert := fs.String("server-cert", defaultServerCert,
+		"where to write the issued TLS cert chain (PEM)")
+	tpmStore := fs.String("tpm-store", defaultTPMStore,
+		"directory for go.step.sm/crypto/tpm key persistence (AK + key handles)")
+	keyMarker := fs.String("tpm-key-marker", defaultTPMKeyMarker,
+		"small JSON file telling pancaked which TPM key to load")
+	acctKeyFile := fs.String("acme-account-key", defaultACMEAcctKey,
+		"path for the ACME account key (JWK). Created on first enroll, "+
+			"reused thereafter.")
+	skipACME := fs.Bool("skip-acme", false,
+		"only do EK export, skip the ACME flow")
+	orchConfigPath := fs.String("orch-config", defaultOrchConfig,
+		"JSON file (baked into pancake-orch-config layer at bootstrap "+
+			"time) supplying ca-url / attest-ca-url / ca-root / "+
+			"attest-ca-root. Individual --flag values override the JSON.")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *tokenLen < 64 || *tokenLen%8 != 0 {
-		return die(fmt.Errorf("--bits must be a multiple of 8 and >= 64"))
+
+	// Layer-baked defaults. When the JSON exists, use it as the
+	// fallback for the four orch fields; explicit flags still win.
+	if cfg, err := loadOrchConfig(*orchConfigPath); err == nil {
+		if *caURL == "" {
+			*caURL = cfg.CAURL
+		}
+		if *caRoot == "" {
+			*caRoot = cfg.StepCARoot
+		}
+		if *attestCAURL == "" {
+			*attestCAURL = cfg.AttestCAURL
+		}
+		if *attestCARoot == "" {
+			*attestCARoot = cfg.AhkcidRoot
+		}
+		fmt.Fprintf(os.Stderr,
+			"[enroll] orch config loaded from %s (ca=%s attest=%s)\n",
+			*orchConfigPath, cfg.CAURL, cfg.AttestCAURL)
 	}
 
-	// Two independent things happen here: (a) bearer-token sealing
-	// via systemd-creds (PCR 7+11), (b) EK pubkey export via
-	// tpm2_createek. Both want the TPM, but they fail differently:
-	//   - systemd-creds is strict — it requires firmware-side
-	//     measurement (only happens via UEFI/UKI boot). On a
-	//     direct -kernel boot it reports `partial -firmware`.
-	//   - tpm2_createek only needs the TPM device itself.
-	// So we attempt them independently and let either succeed.
-	tokenSealed := false
-	if _, err := runner.Capture(runner.Cmd{
-		Argv: []string{"systemd-creds", "has-tpm2"},
-	}); err != nil {
+	// (a) EK export — always runs.
+	if err := exportEK(*ekOut); err != nil {
+		return die(err)
+	}
+
+	if *skipACME {
 		fmt.Fprintln(os.Stderr,
-			"[enroll] systemd-creds reports no usable TPM2 (need UEFI/UKI boot for "+
-				"firmware measurement) — skipping bearer-token sealing")
-	} else {
-		tokenSealed = true
+			"[enroll] --skip-acme set; done after EK export")
+		return 0
 	}
 
-	// (a) Bearer-token sealing — only when systemd-creds is happy.
-	var token string
-	if tokenSealed {
-		raw := make([]byte, *tokenLen/8)
-		if _, err := rand.Read(raw); err != nil {
-			return die(err)
-		}
-		token = hex.EncodeToString(raw)
-
-		if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
-			return die(err)
-		}
-		tmpPlain, err := os.CreateTemp("", "pancake-enroll-")
+	// (b) ACME-tpm enrollment.
+	if *caURL == "" {
+		return die(fmt.Errorf("--ca-url required (unless --skip-acme); " +
+			"either pass it explicitly or bake it into " + defaultOrchConfig))
+	}
+	if *sanList == "" {
+		return die(fmt.Errorf("--san required (at least one DNS:/IP: entry)"))
+	}
+	cn := *deviceID
+	if cn == "" {
+		hn, err := os.Hostname()
 		if err != nil {
-			return die(err)
+			return die(fmt.Errorf("hostname: %w", err))
 		}
-		tmpPlainPath := tmpPlain.Name()
-		if _, err := tmpPlain.WriteString(token); err != nil {
-			tmpPlain.Close()
-			os.Remove(tmpPlainPath)
-			return die(err)
-		}
-		tmpPlain.Close()
-		defer os.Remove(tmpPlainPath)
-
-		if err := runner.Run(runner.Cmd{
-			Argv: []string{"systemd-creds", "encrypt",
-				"--name=pancake-orch-token",
-				"--tpm2-pcrs=" + *pcrs,
-				tmpPlainPath, *out},
-			Sudo: true,
-		}); err != nil {
-			return die(fmt.Errorf("systemd-creds encrypt: %w", err))
-		}
-
-		fmt.Fprintf(os.Stderr,
-			"\n[enroll] sealed token written to %s\n"+
-				"[enroll] sealed against PCRs %s — re-enroll if the boot chain changes\n",
-			*out, *pcrs)
+		cn = hn
+	}
+	dns, ips := parseSANList(*sanList)
+	if len(dns)+len(ips) == 0 {
+		return die(fmt.Errorf("--san parsed to zero entries"))
 	}
 
-	// EK export + persistence. Same operator action also dumps the
-	// endorsement key public area (for the orchestrator's attestation
-	// registry) AND promotes the EK to its TCG-canonical persistent
-	// handle so subsequent pancaked startups can do tpm2_readpublic
-	// instead of re-deriving via tpm2_createek every boot. EK is
-	// durable across reboots (anchored to the TPM endorsement seed):
-	// export-once, ship-once, valid until the TPM is cleared.
-	if err := os.MkdirAll(filepath.Dir(*ekOut), 0o755); err != nil {
+	if err := acmeTPMEnroll(acmeTPMOpts{
+		CAURL:        *caURL,
+		CARoot:       *caRoot,
+		AttestCAURL:  *attestCAURL,
+		AttestCARoot: *attestCARoot,
+		CommonName:   cn,
+		DNSNames:     dns,
+		IPs:          ips,
+		ServerCert:   *serverCert,
+		TPMStoreDir:  *tpmStore,
+		KeyMarker:    *keyMarker,
+		AcctKeyFile:  *acctKeyFile,
+	}); err != nil {
 		return die(err)
 	}
-	tmpDir, err := os.MkdirTemp("", "pancake-ek-")
-	if err != nil {
-		return die(err)
-	}
-	defer os.RemoveAll(tmpDir)
-	ekCtx := filepath.Join(tmpDir, "ek.ctx")
 
-	// If the EK is already at the persistent handle from a prior
-	// enroll on the same TPM, just read it out — same bytes, same
-	// identity. Skips the createek+evictcontrol dance.
-	if err := runner.RunOK(runner.Cmd{
-		Argv: []string{"tpm2_readpublic",
-			"-c", ekHandle, "-o", *ekOut},
-		Sudo: true,
-	}); err == nil && fileExistsNonEmpty(*ekOut) {
-		fmt.Fprintf(os.Stderr,
-			"[enroll] EK already at persistent handle %s; pubkey re-exported to %s\n",
-			ekHandle, *ekOut)
-	} else {
-		if err := runner.Run(runner.Cmd{
-			Argv: []string{"tpm2_createek",
-				"-G", "ecc",
-				"-u", *ekOut,
-				"-c", ekCtx},
-			Sudo: true,
-		}); err != nil {
-			return die(fmt.Errorf("tpm2_createek: %w", err))
-		}
-		// Promote EK to the TCG-canonical persistent handle.
-		// Endorsement-hierarchy auth is empty by default. Idempotent
-		// in practice: if we got here readpublic above said the
-		// handle was empty, so this is a fresh evict.
-		if err := runner.Run(runner.Cmd{
-			Argv: []string{"tpm2_evictcontrol",
-				"-C", "o", "-c", ekCtx, ekHandle},
-			Sudo: true,
-		}); err != nil {
-			return die(fmt.Errorf("tpm2_evictcontrol → %s: %w", ekHandle, err))
-		}
-		fmt.Fprintf(os.Stderr,
-			"[enroll] EK created and persisted at handle %s\n", ekHandle)
-	}
 	fmt.Fprintf(os.Stderr,
-		"[enroll] EK public area written to %s\n"+
-			"[enroll] copy this file to the orchestrator side (it's the\n"+
-			"[enroll] identity verifier for `pancake attest --target=%s`)\n\n",
-		*ekOut, "<vm>:<port>")
-
-	if tokenSealed {
-		fmt.Println(token)
-		fmt.Fprintln(os.Stderr,
-			"\n^ this is the bearer token. Save it to a file (mode 600) and pass it to:\n"+
-				"    pancake orchestrate push --token-file <file> --target <vm>:<port> ...\n"+
-				"  After this terminal goes away, only the TPM (and a matching\n"+
-				"  boot chain) can recover the value from the sealed blob.")
-	} else {
-		fmt.Fprintln(os.Stderr,
-			"[enroll] (token-sealing skipped; EK was still exported above)")
-	}
+		"[enroll] enrollment complete.\n"+
+			"[enroll]   cert:        %s\n"+
+			"[enroll]   tpm marker:  %s (pancaked loads its key via this)\n"+
+			"[enroll]   ek pubkey:   %s\n"+
+			"[enroll] restart pancaked: systemctl restart pancaked\n",
+		*serverCert, *keyMarker, *ekOut)
 	return 0
 }
 
-// (loadSealedToken moved to internal/orchsrv.LoadSealedToken — only
-// pancaked needs to decrypt; enroll.go just produces the encrypted blob.)
+// exportEK reads (or creates and persists at the canonical handle)
+// the TPM endorsement key and writes the public area to outPath.
+// Shells out to tpm2_* — same convention `pancake attest` reads.
+func exportEK(outPath string) error {
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp("", "pancake-ek-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	ekCtx := filepath.Join(tmp, "ek.ctx")
+
+	if err := runner.RunOK(runner.Cmd{
+		Argv: []string{"tpm2_readpublic", "-c", tpmkey.EKHandleECC, "-o", outPath},
+		Sudo: true,
+	}); err == nil && fileExistsNonEmpty(outPath) {
+		fmt.Fprintf(os.Stderr,
+			"[enroll] EK already at persistent handle %s; pubkey re-exported to %s\n",
+			tpmkey.EKHandleECC, outPath)
+		return nil
+	}
+	if err := runner.Run(runner.Cmd{
+		Argv: []string{"tpm2_createek", "-G", "ecc", "-u", outPath, "-c", ekCtx},
+		Sudo: true,
+	}); err != nil {
+		return fmt.Errorf("tpm2_createek: %w", err)
+	}
+	if err := runner.Run(runner.Cmd{
+		Argv: []string{"tpm2_evictcontrol", "-C", "o", "-c", ekCtx, tpmkey.EKHandleECC},
+		Sudo: true,
+	}); err != nil {
+		return fmt.Errorf("tpm2_evictcontrol → %s: %w", tpmkey.EKHandleECC, err)
+	}
+	fmt.Fprintf(os.Stderr,
+		"[enroll] EK created, persisted at handle %s, pubkey written to %s\n",
+		tpmkey.EKHandleECC, outPath)
+	return nil
+}
+
+// loadOrchConfig reads + parses the JSON written by bootstrap's
+// packOrchConfigLayer. Returns ErrNotExist when the layer wasn't
+// installed (i.e. recipe omitted [orchestrator]) — caller treats
+// that as "fall back to flags" without erroring.
+func loadOrchConfig(path string) (*orchConfig, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var c orchConfig
+	if err := json.Unmarshal(b, &c); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return &c, nil
+}
+
+// parseSANList splits "DNS:foo,IP:1.2.3.4,bare" into DNS + IP buckets.
+func parseSANList(s string) ([]string, []net.IP) {
+	var dns []string
+	var ips []net.IP
+	for _, raw := range strings.Split(s, ",") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(raw, "DNS:"):
+			dns = append(dns, raw[4:])
+		case strings.HasPrefix(raw, "IP:"):
+			if ip := net.ParseIP(raw[3:]); ip != nil {
+				ips = append(ips, ip)
+			}
+		default:
+			if ip := net.ParseIP(raw); ip != nil {
+				ips = append(ips, ip)
+			} else {
+				dns = append(dns, raw)
+			}
+		}
+	}
+	return dns, ips
+}

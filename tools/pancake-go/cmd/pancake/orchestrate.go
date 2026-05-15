@@ -22,10 +22,34 @@ import (
 
 	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/pkitls"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 )
+
+// dialOpts gathers the auth-related flags both `get-current` and
+// `push` accept. mTLS only — bearer-token plumbing is gone.
+type dialOpts struct {
+	target     string
+	caFile     string
+	certFile   string
+	keyFile    string
+	serverName string
+}
+
+func registerDialFlags(fs *flag.FlagSet, o *dialOpts) {
+	fs.StringVar(&o.target, "target", "",
+		"VM gRPC address, e.g. localhost:7878 (required)")
+	fs.StringVar(&o.caFile, "ca-file", "",
+		"PEM root CA that signed the server's cert (mTLS).")
+	fs.StringVar(&o.certFile, "cert-file", "",
+		"PEM client-auth leaf cert presented to pancaked (mTLS).")
+	fs.StringVar(&o.keyFile, "key-file", "",
+		"PKCS#8 PEM private key for --cert-file (mTLS).")
+	fs.StringVar(&o.serverName, "server-name", "",
+		"override SNI / server cert hostname check. Default: dial host.")
+}
 
 func cmdOrchestrate(_ *kit.Kit, args []string) int {
 	if len(args) == 0 {
@@ -48,40 +72,62 @@ func cmdOrchestrate(_ *kit.Kit, args []string) int {
 	}
 }
 
-func dialTarget(target, tokenFile string) (orchpb.PancakeClient, *grpc.ClientConn, context.Context, error) {
-	target = strings.TrimPrefix(target, "grpc://")
+func dialTarget(o dialOpts) (orchpb.PancakeClient, *grpc.ClientConn, context.Context, error) {
+	target := strings.TrimPrefix(o.target, "grpc://")
 	target = strings.TrimRight(target, "/")
-	conn, err := grpc.NewClient(target,
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+	// mTLS path. All three files set → TLS with mutual auth. Any
+	// subset that's nonempty without the others is a config error
+	// because there's no graceful "half mTLS" fallback worth having.
+	var dialOpt grpc.DialOption
+	mtlsAny := o.caFile != "" || o.certFile != "" || o.keyFile != ""
+	mtlsAll := o.caFile != "" && o.certFile != "" && o.keyFile != ""
+	switch {
+	case mtlsAll:
+		serverName := o.serverName
+		if serverName == "" {
+			// Strip the :port off "host:7878" so the cert hostname
+			// check sees the bare host.
+			serverName = target
+			if i := strings.LastIndex(serverName, ":"); i >= 0 {
+				serverName = serverName[:i]
+			}
+		}
+		cfg, err := pkitls.LoadClientConfig(
+			o.certFile, o.keyFile, o.caFile, serverName)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("mTLS config: %w", err)
+		}
+		dialOpt = grpc.WithTransportCredentials(credentials.NewTLS(cfg))
+	case mtlsAny:
+		return nil, nil, nil, fmt.Errorf(
+			"--ca-file, --cert-file, --key-file must be set together")
+	default:
+		dialOpt = grpc.WithTransportCredentials(insecure.NewCredentials())
+	}
+
+	conn, err := grpc.NewClient(target, dialOpt)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("dial %s: %w", target, err)
 	}
 	ctx, _ := context.WithTimeout(context.Background(), 30*time.Second)
-	if tokenFile != "" {
-		b, err := os.ReadFile(tokenFile)
-		if err != nil {
-			conn.Close()
-			return nil, nil, nil, fmt.Errorf("token-file: %w", err)
-		}
-		ctx = metadata.AppendToOutgoingContext(ctx,
-			"authorization", "Bearer "+strings.TrimSpace(string(b)))
-	}
 	return orchpb.NewPancakeClient(conn), conn, ctx, nil
 }
 
 func cmdOrchGetCurrent(args []string) int {
 	fs := flag.NewFlagSet("get-current", flag.ContinueOnError)
-	target := fs.String("target", "", "VM gRPC address, e.g. localhost:7878 (required)")
-	tokenFile := fs.String("token-file", "", "bearer token file (optional)")
+	var d dialOpts
+	registerDialFlags(fs, &d)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *target == "" {
+	if d.target == "" {
 		fmt.Fprintln(os.Stderr,
-			"usage: pancake orchestrate get-current --target HOST:PORT [--token-file F]")
+			"usage: pancake orchestrate get-current --target HOST:PORT\n"+
+				"       [--ca-file F --cert-file F --key-file F [--server-name N]]")
 		return 2
 	}
-	cli, conn, ctx, err := dialTarget(*target, *tokenFile)
+	cli, conn, ctx, err := dialTarget(d)
 	if err != nil {
 		return die(err)
 	}
@@ -99,7 +145,7 @@ func cmdOrchGetCurrent(args []string) int {
 		return die(err)
 	}
 	fmt.Printf("VM %s is on generation %d (counter %d, %d layers)\n",
-		*target, gm.Generation.ID, gm.Generation.Counter, len(gm.Layer))
+		d.target, gm.Generation.ID, gm.Generation.Counter, len(gm.Layer))
 	fmt.Printf("  description: %s\n", gm.Generation.Description)
 	fmt.Printf("  created:     %s\n", gm.Generation.Created)
 	return 0
@@ -107,17 +153,18 @@ func cmdOrchGetCurrent(args []string) int {
 
 func cmdOrchPush(args []string) int {
 	fs := flag.NewFlagSet("push", flag.ContinueOnError)
-	target := fs.String("target", "", "VM gRPC address (required)")
+	var d dialOpts
+	registerDialFlags(fs, &d)
 	kitDir := fs.String("kit", "", "kit directory containing the manifest (required)")
 	genID := fs.Int("gen-id", 0, "generation id to push (default: latest)")
-	tokenFile := fs.String("token-file", "", "bearer token file")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *target == "" || *kitDir == "" {
+	if d.target == "" || *kitDir == "" {
 		fmt.Fprintln(os.Stderr,
-			"usage: pancake orchestrate push --target HOST:PORT --kit DIR "+
-				"[--gen-id N] [--token-file F]")
+			"usage: pancake orchestrate push --target HOST:PORT --kit DIR\n"+
+				"       [--gen-id N]\n"+
+				"       [--ca-file F --cert-file F --key-file F [--server-name N]]")
 		return 2
 	}
 	k, err := kit.Open(*kitDir)
@@ -148,14 +195,14 @@ func cmdOrchPush(args []string) int {
 		Lowers:       read("lowers"),
 	}
 
-	cli, conn, ctx, err := dialTarget(*target, *tokenFile)
+	cli, conn, ctx, err := dialTarget(d)
 	if err != nil {
 		return die(err)
 	}
 	defer conn.Close()
 	fmt.Fprintf(os.Stderr,
 		"[orchestrate] pushing kit %s gen %d → %s\n",
-		*kitDir, gid, *target)
+		*kitDir, gid, d.target)
 	resp, err := cli.Update(ctx, m)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[orchestrate] Update: %v\n", err)
@@ -182,6 +229,6 @@ func cmdOrchPush(args []string) int {
 	fmt.Fprintf(os.Stderr,
 		"[orchestrate] installed generation %d on %s. Run `pancake swap %d` "+
 			"in-VM (or have it auto-swap on next boot via current symlink).\n",
-		resp.InstalledGeneration, *target, resp.InstalledGeneration)
+		resp.InstalledGeneration, d.target, resp.InstalledGeneration)
 	return 0
 }

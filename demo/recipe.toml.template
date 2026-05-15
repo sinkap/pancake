@@ -1,0 +1,47 @@
+# Demo recipe for pancake-os end-to-end smoke. Paths are
+# substituted by `envsubst` from demo.sh; every $VAR here is
+# expected to be defined in the calling shell environment:
+#
+#   KIT, BZIMAGE, INITRAMFS, BZ_OUT, EFI_IMG, KEY, CERT, REPO,
+#   AUTH_KEY, WORK, CA_DIR, CA_PORT, AHKCID_PORT
+#
+# Anything else in the file is passed through unchanged. Comments
+# stay because envsubst doesn't filter them.
+
+output   = "${KIT}"
+hostname = "pancake-demo"
+packages = ["openssh-server", "chrony", "nano"]
+
+[distro]
+suite = "noble"
+
+[ssh]
+authorized-keys = "${AUTH_KEY}"
+
+[kernel]
+version = "tree"
+bzimage = "${BZIMAGE}"
+
+[outputs]
+image     = ""
+initramfs = "${INITRAMFS}"
+bzimage   = "${BZ_OUT}"
+efi       = "${EFI_IMG}"
+
+[signing]
+key  = "${KEY}"
+cert = "${CERT}"
+
+[advanced]
+src-root = "${REPO}"
+
+[orchestrator]
+# Trust anchors + URLs baked into the pancake-orch-config verity
+# layer. URLs use 10.0.2.2 (QEMU's host gateway from inside
+# user-mode networking) so the in-VM enroll can reach the host
+# containers without DNS or extra routing setup.
+ca-url         = "https://10.0.2.2:${CA_PORT}/acme/tpm/directory"
+attest-ca-url  = "https://10.0.2.2:${AHKCID_PORT}"
+step-ca-root   = "${WORK}/step-ca-root.crt"
+ahkcid-root    = "${WORK}/ahkcid-root.crt"
+client-ca-root = "${CA_DIR}/ca.crt"
