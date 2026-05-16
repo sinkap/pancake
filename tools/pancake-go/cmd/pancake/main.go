@@ -45,6 +45,7 @@ orchestrator (build/admin host):
   ca init / ca issue       mint a static CA + leaf certs (Slice 1, dev only)
   ca-server up/status/...  manage the step-ca container that issues TPM-
                            attested mTLS certs to enrolled VMs (Slice 2)
+  host-cert init           mint operator host client cert (no docker exec)
 
 Default --kit is /var/lib/pancake (the in-system path). For host-side use
 point it at the kit directory you built with bootstrap.`)
@@ -71,12 +72,12 @@ func main() {
 	}
 
 	// `bootstrap`, `build`, `orchestrate`, `attest`, `ca`, `ca-server`,
-	// and `enroll` operate on free-standing paths (TPM + filesystem
-	// only), not on a pre-existing in-VM kit, so we don't pre-validate
-	// --kit for them.
+	// `host-cert`, and `enroll` operate on free-standing paths (TPM +
+	// filesystem only), not on a pre-existing in-VM kit, so we don't
+	// pre-validate --kit for them.
 	var k *kit.Kit
 	switch sub {
-	case "bootstrap", "build", "orchestrate", "attest", "ca", "ca-server", "enroll":
+	case "bootstrap", "build", "orchestrate", "attest", "ca", "ca-server", "host-cert", "enroll":
 		// nil kit; subcommand owns its own paths
 	default:
 		var err error
@@ -117,6 +118,8 @@ func main() {
 		rc = cmdCA(k, args)
 	case "ca-server":
 		rc = cmdCAServer(k, args)
+	case "host-cert":
+		rc = cmdHostCert(k, args)
 	default:
 		fmt.Fprintf(os.Stderr, "pancake: unknown subcommand %q\n", sub)
 		usage()

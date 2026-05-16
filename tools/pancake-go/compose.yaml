@@ -34,20 +34,27 @@ services:
       context: ./ca-server
     image: pancake-ca-server:local
     container_name: pancake-ca-server
+    depends_on:
+      pancake-attest-ca:
+        condition: service_started
+      pancake-trust-init:
+        condition: service_completed_successfully
     ports:
       - "8443:8443"
     environment:
-      PANCAKE_CA_DNS: "pancake-ca-server,localhost,127.0.0.1"
+      PANCAKE_CA_DNS: "pancake-ca-server,localhost,127.0.0.1,10.0.2.2"
       PANCAKE_CA_NAME: "pancake-demo"
+      PANCAKE_HOST_STATE: /var/lib/pancake-host-state
+      PANCAKE_HOST_UID: "${UID:-1000}"
     volumes:
       - pancake-ca-state:/home/step
       # Writes /pancake-trust/trust-root.crt on first boot so the
       # build server can pick it up without HTTP fetch / operator
       # extraction. See ca-server/init.sh.
       - pancake-trust:/pancake-trust
-    depends_on:
-      pancake-trust-init:
-        condition: service_completed_successfully
+      # Bind-mount for operator-visible host state: JWK password,
+      # trust roots, ca-url. Replaces docker exec/cp round-trips.
+      - ./pancake-host-state:/var/lib/pancake-host-state
 
   pancake-attest-ca:
     build:
@@ -57,14 +64,15 @@ services:
     container_name: pancake-attest-ca
     ports:
       - "8444:8444"
+    environment:
+      PANCAKE_HOST_STATE: /var/lib/pancake-host-state
     volumes:
       - pancake-attest-ca-state:/home/attestca
       # Publishes /pancake-trust/attest-ca-root.crt on first boot
       # so pancake-build-server picks it up without HTTP fetch.
       - pancake-trust:/pancake-trust
-    depends_on:
-      pancake-trust-init:
-        condition: service_completed_successfully
+      # Bind-mount for operator-visible attest CA root
+      - ./pancake-host-state:/var/lib/pancake-host-state
 
   pancake-build-server:
     build:

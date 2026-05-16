@@ -10,6 +10,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -251,11 +252,22 @@ func (s *Server) bakeRuntime(
 		return nil, err
 	}
 
+	var pubBytes []byte
 	if pubSha := in.Blobs["manifest-pubkey"]; pubSha != "" {
-		pubBytes, err := s.readBlob(pubSha)
+		b, err := s.readBlob(pubSha)
 		if err != nil {
 			return nil, err
 		}
+		pubBytes = b
+	} else if s.signer != nil {
+		cert, err := s.signer.Cert(context.Background())
+		if err == nil {
+			if p2, err := pubkeyFromCertBytes(cert); err == nil {
+				pubBytes = p2
+			}
+		}
+	}
+	if len(pubBytes) > 0 {
 		if err := os.MkdirAll(filepath.Join(staging, "etc/pancake"), 0o755); err != nil {
 			return nil, err
 		}
@@ -272,14 +284,36 @@ func (s *Server) bakeRuntime(
 
 // ----- pancaked ------------------------------------------------------
 
-const pancakedUnit = `[Unit]
-Description=pancake update daemon (orchestrator gRPC receiver)
+// pancakeEnrollUnit template — hostname is hardcoded at build time from
+// the recipe so the certificate SAN matches /etc/hostname.
+func pancakeEnrollUnit(hostname string) string {
+	return fmt.Sprintf(`[Unit]
+Description=pancake auto-enrollment (ACME device-attest-01)
 Documentation=https://github.com/sinkap/pancake
 After=pancake-state-rw.service
 Requires=pancake-state-rw.service
+Before=pancaked.service
+ConditionPathExists=!/etc/pancake/server.crt
 
 [Service]
-ExecStart=/usr/sbin/pancaked --tpm-token=auto
+Type=oneshot
+ExecStart=/usr/local/bin/pancake enroll --san DNS:%s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+`, hostname)
+}
+
+const pancakedUnit = `[Unit]
+Description=pancake update daemon (orchestrator gRPC receiver)
+Documentation=https://github.com/sinkap/pancake
+After=pancake-state-rw.service pancake-enroll.service
+Requires=pancake-state-rw.service
+
+[Service]
+ExecStart=/usr/sbin/pancaked
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -291,14 +325,20 @@ WantedBy=multi-user.target
 
 // bakePancaked: /usr/sbin/pancaked + systemd unit. Inputs:
 //
-//	blobs[binary]   (or fallback: bundled-bins-dir/pancaked)
-//	in.Version      version label for the layer (e.g. git sha)
+//	blobs[binary]     (or fallback: bundled-bins-dir/pancaked)
+//	params[hostname]  hostname for auto-enrollment SAN
+//	in.Version        version label for the layer (e.g. git sha)
 func (s *Server) bakePancaked(
 	workRoot string, in *buildpb.PancakeInternal,
 ) (*buildpb.LayerHandle, error) {
 	bin, err := s.blobOrBundled(in.Blobs["binary"], "pancaked")
 	if err != nil {
 		return nil, err
+	}
+	hostname := strings.TrimSpace(in.Params["hostname"])
+	if hostname == "" {
+		return nil, fmt.Errorf("pancaked recipe: params[hostname] required " +
+			"(needed to hardcode SAN in auto-enrollment unit)")
 	}
 	version := in.Version
 	if version == "" {
@@ -321,8 +361,18 @@ func (s *Server) bakePancaked(
 		return nil, err
 	}
 	if err := os.WriteFile(filepath.Join(staging,
+		"etc/systemd/system/pancake-enroll.service"),
+		[]byte(pancakeEnrollUnit(hostname)), 0o644); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(staging,
 		"etc/systemd/system/pancaked.service"),
 		[]byte(pancakedUnit), 0o644); err != nil {
+		return nil, err
+	}
+	if err := os.Symlink("/etc/systemd/system/pancake-enroll.service",
+		filepath.Join(staging,
+			"etc/systemd/system/multi-user.target.wants/pancake-enroll.service")); err != nil {
 		return nil, err
 	}
 	if err := os.Symlink("/etc/systemd/system/pancaked.service",

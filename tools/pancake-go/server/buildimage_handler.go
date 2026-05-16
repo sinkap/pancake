@@ -72,6 +72,12 @@ func (s *Server) BuildImage(
 			return err
 		}
 	}
+	if len(res.Lowers) > 0 {
+		if err := streamArtifact(stream,
+			buildpb.BuildImageChunk_ARTIFACT_MANIFEST, res.Lowers); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -107,9 +107,10 @@ type SSH struct {
 }
 
 type Kernel struct {
-	Version string `yaml:"version"`
-	BzImage string `yaml:"bzimage"`
-	Cmdline string `yaml:"cmdline"`
+	Version     string `yaml:"version"`
+	BzImage     string `yaml:"bzimage"`
+	Cmdline     string `yaml:"cmdline"`
+	SkipModules bool   `yaml:"skip-modules"` // Skip modules upload (useful for kernel-only testing)
 }
 
 type Outputs struct {

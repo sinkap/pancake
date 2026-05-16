@@ -26,6 +26,9 @@
 # Subsequent starts skip the bootstrap and exec step-ca directly.
 
 FROM smallstep/step-ca:latest
+USER root
+RUN apk add --no-cache jq
+USER step
 
 # Build-time: drop the script into /usr/local/bin (needs root).
 USER root

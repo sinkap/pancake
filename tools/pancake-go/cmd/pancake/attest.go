@@ -33,15 +33,27 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/sinkap/pancake/tools/pancake-go/internal/hoststate"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/pkitls"
+
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
 func cmdAttest(_ *kit.Kit, args []string) int {
+	// Resolve hoststate defaults (ignore error; flags can override)
+	var caFileDefault, certFileDefault, keyFileDefault string
+	if paths, err := hoststate.Resolve(); err == nil {
+		caFileDefault = paths.TrustRoot
+		certFileDefault = paths.ClientCert
+		keyFileDefault = paths.ClientKey
+	}
+
 	fs := flag.NewFlagSet("attest", flag.ContinueOnError)
 	target := fs.String("target", "",
 		"address of pancaked, e.g. localhost:7878 (required)")
@@ -51,6 +63,16 @@ func cmdAttest(_ *kit.Kit, args []string) int {
 			"exactly. Skipped if empty.")
 	tokenFile := fs.String("token-file", "",
 		"bearer token file used by Attest's auth interceptor")
+	caFile := fs.String("ca-file", caFileDefault,
+		"PEM root CA for verifying pancaked's server cert (mTLS)")
+	certFile := fs.String("cert-file", certFileDefault,
+		"PEM client cert (mTLS)")
+	keyFile := fs.String("key-file", keyFileDefault,
+		"PKCS#8 PEM private key for --cert-file (mTLS)")
+	serverName := fs.String("server-name", "",
+		"override SNI / hostname verification (mTLS)")
+	insecureSkipVerify := fs.Bool("insecure-skip-verify", false,
+		"skip server hostname verification (dev only)")
 	expectKit := fs.String("kit", "",
 		"path to the kit dir whose generations/<gen>/ holds the "+
 			"manifest.toml + lowers we expect this VM to be running. "+
@@ -81,8 +103,23 @@ func cmdAttest(_ *kit.Kit, args []string) int {
 		return die(err)
 	}
 
-	cc, err := grpc.NewClient(*target,
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	var creds credentials.TransportCredentials
+	if *caFile != "" || *certFile != "" || *keyFile != "" {
+		if *caFile == "" || *certFile == "" || *keyFile == "" {
+			return die(fmt.Errorf("--ca-file, --cert-file, --key-file must be set together"))
+		}
+		cfg, err := pkitls.LoadClientConfig(*certFile, *keyFile, *caFile, *serverName)
+		if err != nil {
+			return die(fmt.Errorf("mTLS: %w", err))
+		}
+		if *insecureSkipVerify {
+			cfg.InsecureSkipVerify = true
+		}
+		creds = credentials.NewTLS(cfg)
+	} else {
+		creds = insecure.NewCredentials()
+	}
+	cc, err := grpc.NewClient(*target, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return die(fmt.Errorf("dial %s: %w", *target, err))
 	}

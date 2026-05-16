@@ -12,6 +12,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
@@ -20,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sinkap/pancake/tools/pancake-go/internal/hoststate"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/pkitls"
@@ -56,7 +59,8 @@ func cmdOrchestrate(_ *kit.Kit, args []string) int {
 		fmt.Fprintln(os.Stderr,
 			"usage: pancake orchestrate <subcommand> [flags]\n"+
 				"  get-current   query a VM for the manifest it's running\n"+
-				"  push          push a kit's gen N manifest to a VM")
+				"  push          push a kit's gen N manifest to a VM\n"+
+				"  attest        get TPM attestation from a VM")
 		return 2
 	}
 	sub, args := args[0], args[1:]
@@ -65,6 +69,8 @@ func cmdOrchestrate(_ *kit.Kit, args []string) int {
 		return cmdOrchGetCurrent(args)
 	case "push":
 		return cmdOrchPush(args)
+	case "attest":
+		return cmdOrchAttest(args)
 	default:
 		fmt.Fprintf(os.Stderr,
 			"pancake orchestrate: unknown subcommand %q\n", sub)
@@ -230,5 +236,75 @@ func cmdOrchPush(args []string) int {
 		"[orchestrate] installed generation %d on %s. Run `pancake swap %d` "+
 			"in-VM (or have it auto-swap on next boot via current symlink).\n",
 		resp.InstalledGeneration, d.target, resp.InstalledGeneration)
+	return 0
+}
+
+func cmdOrchAttest(args []string) int {
+	fs := flag.NewFlagSet("attest", flag.ContinueOnError)
+	target := fs.String("target", "", "VM address (e.g., localhost:7878 or 10.0.2.15:7878)")
+	serverName := fs.String("server-name", "", "server hostname for cert validation (default: derive from target)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *target == "" {
+		fmt.Fprintln(os.Stderr,
+			"usage: pancake orchestrate attest --target HOST:PORT [--server-name NAME]\n"+
+				"\nClient certs auto-detected from pancake-host-state (same as bootstrap)")
+		return 2
+	}
+
+	// Auto-detect client credentials from hoststate
+	paths, err := hoststate.Resolve()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve hoststate: %v\n", err)
+		fmt.Fprintln(os.Stderr, "hint: run `source pancake-host-state/pancake.env` first")
+		return 1
+	}
+
+	// Dial VM with auto-detected client certs
+	d := dialOpts{
+		target:     *target,
+		caFile:     paths.TrustRoot,
+		certFile:   paths.ClientCert,
+		keyFile:    paths.ClientKey,
+		serverName: *serverName,
+	}
+	fmt.Fprintf(os.Stderr, "[debug] using certs: ca=%s cert=%s key=%s\n",
+		d.caFile, d.certFile, d.keyFile)
+	cli, conn, ctx, err := dialTarget(d)
+	if err != nil {
+		return die(fmt.Errorf("connect to VM: %w", err))
+	}
+	defer conn.Close()
+
+	// Generate random nonce for freshness
+	nonce := make([]byte, 32)
+	if _, err := rand.Read(nonce); err != nil {
+		return die(fmt.Errorf("generate nonce: %w", err))
+	}
+
+	fmt.Fprintf(os.Stderr, "[orchestrate] requesting attestation from %s\n", *target)
+	fmt.Fprintf(os.Stderr, "  nonce: %s\n", hex.EncodeToString(nonce))
+
+	resp, err := cli.Attest(ctx, &orchpb.AttestRequest{
+		Nonce: nonce,
+		// Empty PCRs = use pancake-os defaults (7, 11, 12, 13, 14)
+	})
+	if err != nil {
+		return die(fmt.Errorf("Attest RPC: %w", err))
+	}
+
+	fmt.Fprintf(os.Stderr, "\n[attestation report]\n")
+	fmt.Fprintf(os.Stderr, "  quote:     %d bytes\n", len(resp.Quote))
+	fmt.Fprintf(os.Stderr, "  signature: %d bytes\n", len(resp.Signature))
+	fmt.Fprintf(os.Stderr, "  ak_pub:    %d bytes\n", len(resp.AkPub))
+	fmt.Fprintf(os.Stderr, "  ek_pub:    %d bytes\n", len(resp.EkPub))
+	fmt.Fprintf(os.Stderr, "\nPCR values:\n")
+	for _, p := range resp.Pcr {
+		fmt.Fprintf(os.Stderr, "  PCR[%2d]: %s\n", p.Index, hex.EncodeToString(p.Sha256))
+	}
+
+	fmt.Fprintf(os.Stderr, "\n✓ Attestation successful\n")
+	fmt.Fprintf(os.Stderr, "  (Full verification: compare PCRs against expected, verify quote signature with AK)\n")
 	return 0
 }

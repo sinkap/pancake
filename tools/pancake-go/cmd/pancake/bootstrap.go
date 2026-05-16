@@ -28,6 +28,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/sinkap/pancake/tools/pancake-go/internal/hoststate"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/recipe"
 )
@@ -63,6 +64,12 @@ var SystemBaseline = []string{
 
 // cmdBootstrap is the `pancake bootstrap` subcommand.
 func cmdBootstrap(_ *kit.Kit, args []string) int {
+	// Resolve hoststate defaults (ignore error; flags can override)
+	var builderDefault string
+	if paths, err := hoststate.Resolve(); err == nil {
+		builderDefault = paths.BuilderAddr
+	}
+
 	fs := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
 	suite := fs.String("suite", "noble", "Debian/Ubuntu suite")
 	mirror := fs.String("mirror",
@@ -81,7 +88,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 	initramfsPath := fs.String("initramfs", "./pancake-initramfs.cpio.gz",
 		"build the manifest-driven initramfs at this path; empty to skip")
 	kernel := fs.String("kernel", currentKVer(),
-		"kernel VERSION under /lib/modules/<VERSION> whose modules get baked "+
+		"kernel VERSION under /lib/modules/<--kernel> whose modules get baked "+
 			"into --initramfs (default: uname -r).")
 	bzimage := fs.String("bzimage", "",
 		"path to a custom-built bzImage; if set, pack it as a "+
@@ -102,7 +109,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 	cmdline := fs.String("cmdline",
 		"console=ttyS0 rdinit=/init pancake.state=LABEL=PANCAKE_STATE",
 		"kernel cmdline baked into the UKI when --efi is set")
-	builder := fs.String("builder", "",
+	builder := fs.String("builder", builderDefault,
 		"address of a pancake-build-server (e.g. localhost:7879). "+
 			"Required — overrides `builder:` in the recipe. The local "+
 			"build path is gone; \"build offline\" means run the build "+
@@ -135,6 +142,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 	}
 
 	var orch OrchArgs
+	var skipModules bool
 	if recipePath != "" {
 		r, err := recipe.Load(recipePath)
 		if err != nil {
@@ -145,10 +153,29 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			sshHostKeys, sshAuthKeys,
 			image, initramfsPath, kernel, bzimage, bzimageOut,
 			efiOut, cmdline, builder)
-		orch = OrchArgs{
-			CAURL:       r.Orchestrator.CAURL,
-			AttestCAURL: r.Orchestrator.AttestCAURL,
+
+		// Auto-detect orchestrator URLs from environment if not in recipe
+		caURL := r.Orchestrator.CAURL
+		attestCAURL := r.Orchestrator.AttestCAURL
+
+		if caURL == "" {
+			if paths, err := hoststate.Resolve(); err == nil {
+				caURL = paths.CAURL
+			}
 		}
+		if attestCAURL == "" {
+			if paths, err := hoststate.Resolve(); err == nil {
+				attestCAURL = paths.AttestCAURL
+			}
+		}
+
+		orch = OrchArgs{
+			CAURL:       caURL,
+			AttestCAURL: attestCAURL,
+		}
+
+		// Capture skip-modules flag from recipe
+		skipModules = r.Kernel.SkipModules
 	}
 
 	// Sentinel kernel versions: "tree" / "local" mean "read it out of
@@ -206,6 +233,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		Cmdline:         *cmdline,
 		BuilderAddr:     *builder,
 		Orch:            orch,
+		SkipModules:     skipModules,
 	}); err != nil {
 		return die(err)
 	}
@@ -321,6 +349,8 @@ type bootstrapArgs struct {
 	// a pancake-kernel verity layer + pancake-modules from /lib/modules/<Kernel>,
 	// and skip pulling linux-image-generic from the suite.
 	BzImagePath string
+	// SkipModules: when true, don't upload modules layer (useful for kernel-only testing)
+	SkipModules bool
 	// BzImageOutPath: where to drop a copy of the bzImage for QEMU. The
 	// kit owns the canonical (verity-protected) copy; this is just a
 	// convenience handoff.

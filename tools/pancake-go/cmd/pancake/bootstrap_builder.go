@@ -133,12 +133,31 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 		}
 		kernelBlobs = map[string]string{"bzimage": sha}
 
-		// Tar /lib/modules/<a.Kernel> for the modules layer.
-		modSrc := filepath.Join("/lib/modules", a.Kernel)
+		// Stage modules from kernel tree via `make modules_install` to
+		// a temp dir, then tar for upload. This avoids touching the
+		// host's /lib/modules.
+		kernelSrcDir := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(a.BzImagePath)))) // /<tree>/arch/x86/boot/bzImage -> /<tree>
+		modStageDir, err := os.MkdirTemp("", "pancake-modules-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(modStageDir)
+
+		fmt.Fprintf(os.Stderr,
+			"[bootstrap] staging modules from kernel tree via make modules_install\n")
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"sh", "-c",
+				fmt.Sprintf("cd %s && make modules_install INSTALL_MOD_PATH=%s",
+					kernelSrcDir, modStageDir)},
+		}); err != nil {
+			return fmt.Errorf("make modules_install: %w", err)
+		}
+
+		// Tar the staged lib/modules/<ver> tree.
+		modSrc := filepath.Join(modStageDir, "lib/modules", a.Kernel)
 		if _, err := os.Stat(modSrc); err != nil {
-			return fmt.Errorf("--bzimage given but %s missing — pass "+
-				"--kernel <ver> matching the bzImage and ensure "+
-				"`make modules_install` has been run", modSrc)
+			return fmt.Errorf("modules staging failed: %s not found after "+
+				"make modules_install", modSrc)
 		}
 		tarTmp, err := os.CreateTemp("", "modules-*.tar")
 		if err != nil {
@@ -147,12 +166,13 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 		tarPath := tarTmp.Name()
 		tarTmp.Close()
 		defer os.Remove(tarPath)
+
 		fmt.Fprintf(os.Stderr,
-			"[bootstrap] tarring %s for modules layer upload\n", modSrc)
+			"[bootstrap] tarring staged modules for upload\n")
 		if err := runner.Run(runner.Cmd{
 			Argv: []string{"tar", "-cf", tarPath,
-				"-C", filepath.Dir(modSrc), filepath.Base(modSrc)},
-			Sudo: true,
+				"-C", modStageDir,
+				"lib"},
 		}); err != nil {
 			return fmt.Errorf("tar modules: %w", err)
 		}
@@ -193,7 +213,18 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 	}
 	addInternal("base", "", nil)
 	addInternal("runtime", "", nil)  // server uses bundled binaries
-	addInternal("pancaked", "", nil) // server uses bundled binary
+	// Pass hostname to pancaked so auto-enroll unit can hardcode the SAN
+	packages = append(packages, &buildpb.Package{
+		Manager: &buildpb.Package_Internal{
+			Internal: &buildpb.PancakeInternal{
+				Recipe:  "pancaked",
+				Version: "2.0.0-autoenroll",
+				Params: map[string]string{
+					"hostname": hn,
+				},
+			},
+		},
+	})
 	addInternal("pancake-host", "", hostBlobs)
 	if a.Orch.hasURLs() {
 		packages = append(packages, &buildpb.Package{
@@ -219,7 +250,7 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 		internalCount++
 	}
 	if a.BzImagePath != "" {
-		internalCount += 2
+		internalCount += 2 // kernel + modules
 	}
 	fmt.Fprintf(os.Stderr,
 		"[bootstrap] BuildImage(%d apt + %d internal) — server-built\n",
@@ -258,9 +289,9 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 		}
 	}()
 
-	// MANIFEST emits two streams sequentially: body then sig.
-	var manifestBody, manifestSig, pubkeyPEM []byte
-	manifestBodyDone := false
+	// MANIFEST emits three streams: body, sig, lowers.
+	var manifestBody, manifestSig, lowers, pubkeyPEM []byte
+	manifestPhase := 0
 
 	for {
 		c, err := stream.Recv()
@@ -272,13 +303,19 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 		}
 		switch c.Artifact {
 		case buildpb.BuildImageChunk_ARTIFACT_MANIFEST:
-			if !manifestBodyDone {
+			switch manifestPhase {
+			case 0:
 				manifestBody = append(manifestBody, c.Data...)
 				if c.Last {
-					manifestBodyDone = true
+					manifestPhase = 1
 				}
-			} else {
+			case 1:
 				manifestSig = append(manifestSig, c.Data...)
+				if c.Last {
+					manifestPhase = 2
+				}
+			case 2:
+				lowers = append(lowers, c.Data...)
 			}
 		case buildpb.BuildImageChunk_ARTIFACT_PUBKEY:
 			pubkeyPEM = append(pubkeyPEM, c.Data...)
@@ -310,23 +347,30 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 		}
 	}
 
-	// 5. Write the manifest sidecar trio.
+	// 5. Write the kit's on-disk layout (generations/1/...) so
+	// pancake attest finds manifest.toml + lowers + sig at the same
+	// paths the VM has them.
+	genDir := filepath.Join(a.Output, "generations", "1")
+	if err := os.MkdirAll(genDir, 0o755); err != nil {
+		return err
+	}
 	if len(manifestBody) > 0 {
-		manifestPath := filepath.Join(a.Output, "manifest.toml")
-		if err := os.WriteFile(manifestPath, manifestBody, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(genDir, "manifest.toml"), manifestBody, 0o644); err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "[bootstrap] manifest → %s\n", manifestPath)
 	}
 	if len(manifestSig) > 0 {
-		if err := os.WriteFile(filepath.Join(a.Output, "manifest.toml.sig"),
-			manifestSig, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(genDir, "manifest.toml.sig"), manifestSig, 0o644); err != nil {
+			return err
+		}
+	}
+	if len(lowers) > 0 {
+		if err := os.WriteFile(filepath.Join(genDir, "lowers"), lowers, 0o644); err != nil {
 			return err
 		}
 	}
 	if len(pubkeyPEM) > 0 {
-		if err := os.WriteFile(filepath.Join(a.Output, "manifest.pubkey"),
-			pubkeyPEM, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(a.Output, "manifest.pubkey"), pubkeyPEM, 0o644); err != nil {
 			return err
 		}
 	}

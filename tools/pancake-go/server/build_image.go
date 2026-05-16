@@ -35,6 +35,7 @@ import (
 	"github.com/sinkap/pancake/tools/pancake-go/internal/efi"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/initramfs"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/pack"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
 )
 
@@ -74,9 +75,10 @@ type AssembleImageResult struct {
 	BzImage   []byte
 	UKI       []byte
 	EFIDisk   []byte
-	Manifest  []byte // signed generation manifest (toml + sibling .sig)
+	Manifest    []byte
 	ManifestSig []byte
-	PubkeyPEM []byte
+	Lowers      []byte
+	PubkeyPEM   []byte
 }
 
 // AssembleImage runs the BuildImage pipeline. Caller-side work is
@@ -95,6 +97,19 @@ func (s *Server) AssembleImage(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("BuildGeneration: %w", err)
+	}
+
+	// Sign the generation manifest BEFORE materializing the kit
+	// so manifest.toml.sig is included in the on-disk kit (and
+	// therefore in the disk image + EFI disk packed from it).
+	// /init refuses to mount when manifest.pubkey is baked into
+	// the initramfs but the sig is missing on disk.
+	if s.signer != nil {
+		sig, err := s.signer.SignManifest(ctx, gm.ManifestToml)
+		if err != nil {
+			return nil, fmt.Errorf("signer.SignManifest: %w", err)
+		}
+		gm.ManifestSig = sig
 	}
 
 	// 2. Materialize kit dir from the cache. Each layer's
@@ -227,20 +242,13 @@ func (s *Server) AssembleImage(
 		}
 	}
 
-	// 8. Sign the generation manifest via s.signer (if set).
-	// BuildGeneration left manifest_sig empty — Phase 5's
-	// sign-server is the one trust boundary that fills it in.
+
+
 	if req.WantManifest {
 		out.Manifest = gm.ManifestToml
-		if s.signer != nil {
-			sig, err := s.signer.SignManifest(ctx, gm.ManifestToml)
-			if err != nil {
-				return nil, fmt.Errorf("signer.SignManifest: %w", err)
-			}
-			out.ManifestSig = sig
-		}
+		out.ManifestSig = gm.ManifestSig
+		out.Lowers = gm.Lowers
 	}
-
 	return out, nil
 }
 
@@ -265,8 +273,16 @@ func (s *Server) materializeKit(
 		}
 		src := s.layerDir(h.Roothash)
 		dst := filepath.Join(repo, dirName)
-		if err := os.Symlink(src, dst); err != nil {
-			return fmt.Errorf("symlink %s → %s: %w", dst, src, err)
+		// cp -al: hardlink files into the kit dir (zero copy when
+		// the cache + workdir live on the same filesystem, which
+		// they do inside the build server container). Plain
+		// symlinks break once pack.Disk seals the kit into a fresh
+		// ext4 image — the symlink targets only exist on the build
+		// server, not inside the resulting disk.
+		if err := runner.Run(runner.Cmd{
+			Argv: []string{"cp", "-al", src, dst},
+		}); err != nil {
+			return fmt.Errorf("cp -al %s → %s: %w", src, dst, err)
 		}
 	}
 	if err := os.WriteFile(

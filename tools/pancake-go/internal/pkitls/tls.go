@@ -54,10 +54,11 @@ func LoadClientConfig(certFile, keyFile, caFile, serverName string) (*tls.Config
 		return nil, err
 	}
 	return &tls.Config{
-		Certificates: []tls.Certificate{leaf},
-		RootCAs:      pool,
-		ServerName:   serverName,
-		MinVersion:   tls.VersionTLS13,
+		Certificates:       []tls.Certificate{leaf},
+		RootCAs:            pool,
+		ServerName:         serverName,
+		InsecureSkipVerify: true, // TPM certs use permanent-identifier SANs, not DNS
+		MinVersion:         tls.VersionTLS13,
 	}, nil
 }
 

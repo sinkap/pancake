@@ -86,6 +86,17 @@ TPL
     # Add the ACME-tpm provisioner. `step ca provisioner add` writes
     # straight to the on-disk ca.json since the daemon isn't running
     # yet.
+    # Wait for pancake-attest-ca to publish its root cert to the
+    # shared trust volume so we can configure --attestation-roots on
+    # the ACME-tpm provisioner. Without that step-ca cannot verify
+    # the x5c chain of TPM AK attestations submitted via
+    # device-attest-01.
+    for i in $(seq 1 30); do
+        [ -s /pancake-trust/attest-ca-ak-root.crt ] && break
+        echo "[pancake-ca] waiting for attest-ca-root.crt ($i/30)"
+        sleep 1
+    done
+
     echo "[pancake-ca] adding ACME provisioner '$PROVISIONER_NAME' (device-attest-01 / tpm)"
     step ca provisioner add "$PROVISIONER_NAME" \
         --type ACME \
@@ -94,6 +105,27 @@ TPL
         --x509-template "$CA_HOME/templates/server-auth.tpl" \
         --ca-config "$CA_HOME/config/ca.json" \
         2>&1 | sed 's/^/  /'
+
+    # step CLI 0.30 does not always write the attestationRoots field
+    # back to ca.json from --attestation-roots; inject it via jq so
+    # the ACME-tpm provisioner can verify x5c chains submitted by
+    # devices attested by pancake-attest-ca.
+    if [ -s /pancake-trust/attest-ca-ak-root.crt ]; then
+        # ACME provisioner's attestationRoots is a []byte in Go (a
+        # PEM bundle), which marshals to/from JSON as a base64 string.
+        ROOT_B64=$(base64 -w0 < /pancake-trust/attest-ca-ak-root.crt)
+        CFG="$CA_HOME/config/ca.json"
+        cp "$CFG" "$CFG.bak"
+        jq --arg pn "$PROVISIONER_NAME" --arg pem "$ROOT_B64" \
+            '(.authority.provisioners[] | select(.name == $pn)) |= (.attestationRoots = $pem))' \
+            "$CFG.bak" > "$CFG" 2>&1 || {
+            # jq syntax variant for older versions
+            jq --arg pn "$PROVISIONER_NAME" --arg pem "$ROOT_B64" \
+                '.authority.provisioners |= map(if .name == $pn then .attestationRoots = $pem else . end)' \
+                "$CFG.bak" > "$CFG"
+        }
+        echo "[pancake-ca] injected attestationRoots (base64 PEM) into provisioner '$PROVISIONER_NAME'"
+    fi
 
     # Add a JWK provisioner for the code-signing flow. pancake-sign
     # uses this provisioner (one-shot CSR with the JWK key) to mint
@@ -110,19 +142,82 @@ TPL
         --ca-config "$CA_HOME/config/ca.json" \
         2>&1 | sed 's/^/  /' || true
 
+    # Add a JWK provisioner for operator host client certs (first run only).
+    # The provisioner addition happens once; trust material publishing
+    # is idempotent and happens on every boot (see below).
+    HOST_PROVISIONER="${PANCAKE_HOST_PROVISIONER_NAME:-host-cert}"
+    HOST_STATE="${PANCAKE_HOST_STATE:-/var/lib/pancake-host-state}"
+    HOST_PW="$HOST_STATE/host-cert.jwk.pwd"
+
+    # Wait for bind-mount to become writable, then create JWK password
+    if [ -d "$HOST_STATE" ]; then
+        for attempt in $(seq 1 10); do
+            if mkdir -p "$HOST_STATE" 2>/dev/null && [ -w "$HOST_STATE" ]; then
+                break
+            fi
+            echo "[pancake-ca] waiting for $HOST_STATE to be writable ($attempt/10)"
+            sleep 1
+        done
+
+        if [ ! -f "$HOST_PW" ]; then
+            head -c 32 /dev/urandom | base64 > "$HOST_PW"
+            chmod 0600 "$HOST_PW"
+        fi
+
+        echo "[pancake-ca] adding JWK provisioner '$HOST_PROVISIONER' (operator host certs)"
+        step ca provisioner add "$HOST_PROVISIONER" \
+            --type JWK \
+            --create \
+            --password-file "$HOST_PW" \
+            --x509-template "$CA_HOME/templates/server-auth.tpl" \
+            --ca-config "$CA_HOME/config/ca.json" \
+            2>&1 | sed 's/^/  /' || true
+    fi
+
     FP=$(step certificate fingerprint "$CA_HOME/certs/root_ca.crt")
     echo "[pancake-ca] root fingerprint: $FP"
     echo "[pancake-ca] CA home: $CA_HOME (volume-mount me to persist!)"
 fi
 
-# Drop a copy of the root cert into the shared pancake-trust volume
-# (when mounted) so pancake-build-server can read it without HTTPS
-# fetch / operator extraction. Idempotent — re-runs every container
-# start so a wiped trust volume gets repopulated even on a CA that
-# is already initialized.
+# Drop a copy of the root + intermediate cert bundle into the shared
+# pancake-trust volume (when mounted) so pancake-build-server can read
+# it without HTTPS fetch / operator extraction. Bundle includes both
+# root and intermediate so client certs (issued by intermediate) can be
+# validated. Idempotent — re-runs every container start so a wiped
+# trust volume gets repopulated even on a CA that is already initialized.
 if [ -d /pancake-trust ]; then
-    install -m 0644 "$CA_HOME/certs/root_ca.crt" /pancake-trust/trust-root.crt
-    echo "[pancake-ca] published trust-root.crt to /pancake-trust"
+    cat "$CA_HOME/certs/intermediate_ca.crt" "$CA_HOME/certs/root_ca.crt" > /pancake-trust/trust-root.crt
+    echo "[pancake-ca] published trust-root.crt (intermediate + root) to /pancake-trust"
+fi
+
+# Publish operator host state to the bind-mount (idempotent, runs every boot).
+# Replaces docker exec/cp dance — operator runs `pancake host-cert init`
+# which reads these files to mint a client cert without docker exec.
+HOST_STATE="${PANCAKE_HOST_STATE:-/var/lib/pancake-host-state}"
+HOST_PROVISIONER="${PANCAKE_HOST_PROVISIONER_NAME:-host-cert}"
+if [ -d "$HOST_STATE" ]; then
+    # Extract and publish the encrypted JWK so operator can sign auth
+    # tokens locally. The JWK is encrypted with the password already
+    # in $HOST_STATE/host-cert.jwk.pwd. We publish the encryptedKey field,
+    # not the public key field.
+    jq -r --arg pn "$HOST_PROVISIONER" \
+        '.authority.provisioners[] | select(.name == $pn) | .encryptedKey' \
+        "$CA_HOME/config/ca.json" > "$HOST_STATE/host-cert.jwk" 2>/dev/null || true
+    chmod 0600 "$HOST_STATE/host-cert.jwk" 2>/dev/null || true
+
+    # Publish trust material (intermediate + root bundle for client cert validation)
+    cat "$CA_HOME/certs/intermediate_ca.crt" "$CA_HOME/certs/root_ca.crt" > "$HOST_STATE/step-root.crt" 2>/dev/null || true
+    chmod 0644 "$HOST_STATE/step-root.crt" 2>/dev/null || true
+
+    # Write service URLs for client defaults
+    echo "https://localhost:8443" > "$HOST_STATE/ca-url" 2>/dev/null || true
+    echo "localhost:7879" > "$HOST_STATE/builder-addr" 2>/dev/null || true
+
+    # Chown entire dir to operator UID so they can read without sudo
+    HOST_UID="${PANCAKE_HOST_UID:-1000}"
+    chown -R "$HOST_UID:$HOST_UID" "$HOST_STATE" 2>/dev/null || true
+
+    echo "[pancake-ca] published operator host state to $HOST_STATE"
 fi
 
 # Hand off to step-ca. The container already runs as `step` (set

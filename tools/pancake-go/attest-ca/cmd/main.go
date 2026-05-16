@@ -106,10 +106,12 @@ func loadOrSelfSignServerCert(certFile, keyFile, caDir string) (tls.Certificate,
 		Subject:      pkix.Name{CommonName: "pancake-attest-ca"},
 		NotBefore:    now.Add(-time.Hour),
 		NotAfter:     now.AddDate(10, 0, 0),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     []string{"localhost", "pancake-attest-ca", "pancake-attest-ca"},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("10.0.2.2")},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -138,12 +140,37 @@ func loadOrSelfSignServerCert(certFile, keyFile, caDir string) (tls.Certificate,
 // so pancake-build-server (mounting the same docker volume RO)
 // can bake it into orch-config layers without HTTP fetch / blob
 // upload from the operator. No-op when the volume is not mounted.
+//
+// Retries on EACCES — compose-internal trust-init chmods the
+// volume world-writable, but the mode change is racy at startup;
+// give it a few seconds before giving up.
+func publishOne(src, dst string) {
+	b, err := os.ReadFile(src)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"[pancake-attest-ca] publishOne: read %s: %v\n", src, err)
+		return
+	}
+	for attempt := 1; attempt <= 10; attempt++ {
+		if err := os.WriteFile(dst, b, 0o644); err == nil {
+			fmt.Fprintf(os.Stderr,
+				"[pancake-attest-ca] published %s (attempt %d)\n", dst, attempt)
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	fmt.Fprintf(os.Stderr,
+		"[pancake-attest-ca] publishOne: gave up on %s\n", dst)
+}
+
 func publishTrustRoot(_ tls.Certificate, caDir string) {
 	const dst = "/pancake-trust/attest-ca-root.crt"
 	if _, err := os.Stat("/pancake-trust"); err != nil {
 		return
 	}
 	src := filepath.Join(caDir, "server.crt")
+	ak := filepath.Join(caDir, "ca.crt")
+	publishOne(ak, "/pancake-trust/attest-ca-ak-root.crt")
 	b, err := os.ReadFile(src)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
@@ -151,14 +178,35 @@ func publishTrustRoot(_ tls.Certificate, caDir string) {
 			src, err)
 		return
 	}
-	if err := os.WriteFile(dst, b, 0o644); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"[pancake-attest-ca] publishTrustRoot: write %s: %v\n",
-			dst, err)
-		return
+	for attempt := 1; attempt <= 10; attempt++ {
+		if err := os.WriteFile(dst, b, 0o644); err == nil {
+			fmt.Fprintf(os.Stderr,
+				"[pancake-attest-ca] published %s (attempt %d)\n",
+				dst, attempt)
+			break
+		} else if attempt == 10 {
+			fmt.Fprintf(os.Stderr,
+				"[pancake-attest-ca] publishTrustRoot: write %s: %v (giving up)\n",
+				dst, err)
+		} else {
+			time.Sleep(time.Second)
+		}
 	}
-	fmt.Fprintf(os.Stderr,
-		"[pancake-attest-ca] published %s\n", dst)
+
+	// Also publish to bind-mount for operator host access
+	hostState := os.Getenv("PANCAKE_HOST_STATE")
+	if hostState == "" {
+		hostState = "/var/lib/pancake-host-state"
+	}
+	if st, err := os.Stat(hostState); err == nil && st.IsDir() {
+		publishOne(src, filepath.Join(hostState, "attest-ca-root.crt"))
+		// Write attest-ca URL for client defaults
+		os.WriteFile(filepath.Join(hostState, "attest-ca-url"),
+			[]byte("https://localhost:8444\n"), 0644)
+		fmt.Fprintf(os.Stderr,
+			"[pancake-attest-ca] published attest-ca-root.crt and attest-ca-url to %s\n",
+			hostState)
+	}
 }
 
 func die(format string, args ...any) {
