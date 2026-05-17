@@ -143,6 +143,8 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 
 	var orch OrchArgs
 	var skipModules bool
+	var platform string
+	var gceArgs GCEUploadArgs
 	if recipePath != "" {
 		r, err := recipe.Load(recipePath)
 		if err != nil {
@@ -176,6 +178,18 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 
 		// Capture skip-modules flag from recipe
 		skipModules = r.Kernel.SkipModules
+
+		// Platform + GCE upload args (env var overrides recipe)
+		platform = r.Platform
+		if env := os.Getenv("PANCAKE_PLATFORM"); env != "" {
+			platform = env
+		}
+		gceArgs = GCEUploadArgs{
+			Project:     r.GCE.Project,
+			Bucket:      r.GCE.Bucket,
+			CreateImage: r.GCE.CreateImage,
+			ImageFamily: r.GCE.ImageFamily,
+		}
 	}
 
 	// Sentinel kernel versions: "tree" / "local" mean "read it out of
@@ -234,6 +248,8 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		BuilderAddr:     *builder,
 		Orch:            orch,
 		SkipModules:     skipModules,
+		Platform:        platform,
+		GCE:             gceArgs,
 	}); err != nil {
 		return die(err)
 	}
@@ -375,6 +391,23 @@ type bootstrapArgs struct {
 	// enroll` and `pancaked` at /etc/pancake/orch/. Empty struct skips
 	// the layer (Slice 1 fallback path).
 	Orch OrchArgs
+
+	// Platform selects deployment target ("self-hosted", "gce", ...).
+	// Empty == "self-hosted". When "gce", bootstrap auto-uploads the EFI
+	// image to GCS after build (see GCE field for bucket/image config).
+	Platform string
+
+	// GCE is the GCS upload + GCE image creation config used when
+	// Platform == "gce". Empty fields are tolerated when Platform is not "gce".
+	GCE GCEUploadArgs
+}
+
+// GCEUploadArgs mirrors recipe.GCE for bootstrap's GCS upload step.
+type GCEUploadArgs struct {
+	Project     string // GCP project ID (required for CreateImage)
+	Bucket      string // gs://bucket or bucket name (required when Platform=gce)
+	CreateImage bool   // if true, also create a GCE image after upload
+	ImageFamily string // optional GCE image family (rolling-update)
 }
 
 // OrchArgs mirrors recipe.Orchestrator.

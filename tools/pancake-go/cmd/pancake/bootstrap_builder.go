@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/platform/gce"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
 
 	"google.golang.org/grpc"
@@ -381,5 +382,87 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 
 	fmt.Fprintf(os.Stderr,
 		"[bootstrap] done — kit + artifacts under %s\n", a.Output)
+
+	// Platform-specific post-processing.
+	if a.Platform == "gce" {
+		if err := uploadToGCE(ctx, a); err != nil {
+			return fmt.Errorf("gce upload: %w", err)
+		}
+	}
+	return nil
+}
+
+// uploadToGCE handles the platform=gce flow: convert local EFI image to
+// the GCE tar.gz format, upload to the configured GCS bucket, and
+// optionally create a GCE custom image via the Compute API.
+func uploadToGCE(ctx context.Context, a bootstrapArgs) error {
+	if a.EFIPath == "" {
+		return fmt.Errorf("platform=gce requires outputs.efi to be set (no EFI image was built)")
+	}
+	if a.GCE.Bucket == "" {
+		return fmt.Errorf("platform=gce requires gce.bucket in recipe (where to upload)")
+	}
+
+	fmt.Fprintf(os.Stderr,
+		"[bootstrap] platform=gce: converting %s to GCE tar.gz\n", a.EFIPath)
+
+	stagingDir := filepath.Join(a.Output, "gce-staging")
+	tarPath, err := gce.ConvertToGCETarGz(a.EFIPath, stagingDir)
+	if err != nil {
+		return fmt.Errorf("convert to tar.gz: %w", err)
+	}
+	defer os.Remove(tarPath) // keep stagingDir for visibility, drop the big archive
+
+	// Build object name: pancake-os-<timestamp>.tar.gz
+	objectName := fmt.Sprintf("pancake-os-%s.tar.gz",
+		time.Now().UTC().Format("20060102-150405"))
+
+	// Normalize bucket spec: caller may give "gs://bucket" or "bucket".
+	bucketSpec := a.GCE.Bucket
+	gsPath := bucketSpec + "/" + objectName
+
+	fmt.Fprintf(os.Stderr, "[bootstrap] uploading to %s\n", gsPath)
+	uri, err := gce.UploadToGCS(ctx, tarPath, gsPath)
+	if err != nil {
+		return fmt.Errorf("upload to GCS: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "[bootstrap] uploaded: %s\n", uri)
+
+	imageName := ""
+	if a.GCE.CreateImage {
+		if a.GCE.Project == "" {
+			return fmt.Errorf("gce.create-image requires gce.project")
+		}
+		// Image name = object name minus .tar.gz, GCE-name-safe
+		imageName = "pancake-os-" + time.Now().UTC().Format("20060102-150405")
+		fmt.Fprintf(os.Stderr,
+			"[bootstrap] creating GCE image %s (family=%s, project=%s)\n",
+			imageName, a.GCE.ImageFamily, a.GCE.Project)
+		if err := gce.CreateGCEImage(ctx, uri, imageName, a.GCE.ImageFamily, a.GCE.Project); err != nil {
+			return fmt.Errorf("create GCE image: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "[bootstrap] image created: %s\n", imageName)
+	}
+
+	// Print next steps
+	fmt.Fprintln(os.Stderr, "\n[bootstrap] platform=gce: ready to deploy.")
+	fmt.Fprintf(os.Stderr, "  GCS object: %s\n", uri)
+	if imageName != "" {
+		fmt.Fprintf(os.Stderr, "  GCE image:  %s\n", imageName)
+		fmt.Fprintln(os.Stderr, "  Create instance:")
+		fmt.Fprintf(os.Stderr,
+			"    gcloud compute instances create test-vm \\\n"+
+				"      --image=%s --image-project=%s \\\n"+
+				"      --enable-vtpm --shielded-secure-boot \\\n"+
+				"      --machine-type=n2-standard-2\n",
+			imageName, a.GCE.Project)
+	} else {
+		fmt.Fprintln(os.Stderr, "  Create GCE image:")
+		fmt.Fprintf(os.Stderr,
+			"    gcloud compute images create pancake-os-v1 \\\n"+
+				"      --source-uri=%s \\\n"+
+				"      --guest-os-features=UEFI_COMPATIBLE,GVNIC,SEV_CAPABLE\n",
+			uri)
+	}
 	return nil
 }

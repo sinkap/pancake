@@ -78,7 +78,19 @@ type Recipe struct {
 	Kernel       Kernel       `yaml:"kernel"`
 	Outputs      Outputs      `yaml:"outputs"`
 	Orchestrator Orchestrator `yaml:"orchestrator"`
+	Attestation  Attestation  `yaml:"attestation"`
 	GCE          GCE          `yaml:"gce"`
+}
+
+// Attestation configures how TPM attestation is performed.
+// Independent of Platform - you can run on GCE with custom attestation
+// (portable), or use gce-shielded (GCE-only, simpler).
+type Attestation struct {
+	// Mode selects the attestation backend:
+	// - "custom" (default): pancake's TPM attestation, works on any platform
+	// - "gce-shielded": GCE Shielded VM API, only on GCE
+	// - "auto": try gce-shielded if available, fallback to custom
+	Mode string `yaml:"mode"`
 }
 
 // Orchestrator declares the single endpoint of the orchestrator
@@ -134,13 +146,29 @@ type Outputs struct {
 
 // GCE holds Google Cloud-specific configuration (when platform: gce).
 type GCE struct {
-	Project         string `yaml:"project"`
-	Zone            string `yaml:"zone"`
-	ImageFamily     string `yaml:"image-family"`
-	MachineType     string `yaml:"machine-type"`
-	EnableVTPM      bool   `yaml:"enable-vtpm"`
-	EnableSecureBoot bool  `yaml:"enable-secure-boot"`
-	FleetServer     string `yaml:"fleet-server"` // Fleet orchestrator URL for auto-enrollment
+	Project string `yaml:"project"`
+	Zone    string `yaml:"zone"`
+
+	// Bucket is the GCS path bootstrap uploads images to (e.g.
+	// "gs://my-pancake-images" or "my-pancake-images"). Required when
+	// platform is "gce".
+	Bucket string `yaml:"bucket"`
+
+	// CreateImage: if true, bootstrap creates a GCE image after upload
+	// via the Compute API. Defaults to false (just upload to GCS).
+	CreateImage bool `yaml:"create-image"`
+
+	// ImageFamily is the GCE image family for rolling updates.
+	// Used when CreateImage is true.
+	ImageFamily string `yaml:"image-family"`
+
+	// Deployment defaults (used by fleet server, not bootstrap)
+	MachineType      string `yaml:"machine-type"`
+	EnableVTPM       bool   `yaml:"enable-vtpm"`
+	EnableSecureBoot bool   `yaml:"enable-secure-boot"`
+
+	// FleetServer is the fleet orchestrator URL VMs auto-register with on boot.
+	FleetServer string `yaml:"fleet-server"`
 }
 
 // Load reads + parses a recipe file. Strict mode: unknown YAML keys
