@@ -59,6 +59,12 @@ type Recipe struct {
 	Hostname string   `yaml:"hostname"`
 	Packages []string `yaml:"packages"`
 
+	// Platform specifies the deployment target: "self-hosted" (default),
+	// "gce", "azure", "aws". Affects TPM backend, metadata sources, and
+	// image format. Can be overridden by PANCAKE_PLATFORM env var or
+	// --platform CLI flag.
+	Platform string `yaml:"platform"`
+
 	// Builder is the address of the pancake-build-server that will
 	// assemble the kit (e.g. "localhost:7879"). The CLI's --builder
 	// flag overrides this. Required: with no value from either
@@ -72,6 +78,7 @@ type Recipe struct {
 	Kernel       Kernel       `yaml:"kernel"`
 	Outputs      Outputs      `yaml:"outputs"`
 	Orchestrator Orchestrator `yaml:"orchestrator"`
+	GCE          GCE          `yaml:"gce"`
 }
 
 // Orchestrator declares the single endpoint of the orchestrator
@@ -123,6 +130,17 @@ type Outputs struct {
 	BzImage string `yaml:"bzimage"`
 	// EFI is the UEFI-bootable disk; corresponds to --efi.
 	EFI string `yaml:"efi"`
+}
+
+// GCE holds Google Cloud-specific configuration (when platform: gce).
+type GCE struct {
+	Project         string `yaml:"project"`
+	Zone            string `yaml:"zone"`
+	ImageFamily     string `yaml:"image-family"`
+	MachineType     string `yaml:"machine-type"`
+	EnableVTPM      bool   `yaml:"enable-vtpm"`
+	EnableSecureBoot bool  `yaml:"enable-secure-boot"`
+	FleetServer     string `yaml:"fleet-server"` // Fleet orchestrator URL for auto-enrollment
 }
 
 // Load reads + parses a recipe file. Strict mode: unknown YAML keys

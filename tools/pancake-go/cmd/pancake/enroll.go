@@ -40,6 +40,7 @@ import (
 
 	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmbackend"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmkey"
 )
 
@@ -84,6 +85,8 @@ func fileExistsNonEmpty(p string) bool {
 
 func cmdEnroll(_ *kit.Kit, args []string) int {
 	fs := flag.NewFlagSet("enroll", flag.ContinueOnError)
+	platform := fs.String("platform", "",
+		"platform mode: self-hosted, gce, auto (auto-detect)")
 	ekOut := fs.String("ek-out", defaultEKOut,
 		"path to write the TPM endorsement key public area (TPM2B_PUBLIC). "+
 			"Used by `pancake attest` on the orchestrator to verify this "+
@@ -131,6 +134,25 @@ func cmdEnroll(_ *kit.Kit, args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+
+	// Set up TPM backend based on platform
+	platformMode := *platform
+	if platformMode == "" {
+		platformMode = os.Getenv("PANCAKE_PLATFORM")
+	}
+	if platformMode == "" {
+		platformMode = "auto" // Auto-detect
+	}
+	backend, err := tpmbackend.New(platformMode)
+	if err != nil {
+		return die(fmt.Errorf("setup TPM backend: %w", err))
+	}
+	if err := backend.SetupEnv(); err != nil {
+		return die(fmt.Errorf("configure TPM environment: %w", err))
+	}
+	fmt.Fprintf(os.Stderr,
+		"[enroll] platform: %s, TPM device: %s, EK source: %s\n",
+		backend.Platform(), backend.Device(), backend.EKCertSource())
 
 	// Layer-baked defaults. When the JSON exists, use it as the
 	// fallback for the four orch fields; explicit flags still win.
