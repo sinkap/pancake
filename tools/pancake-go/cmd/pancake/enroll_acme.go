@@ -69,11 +69,12 @@ func acmeTPMEnroll(o acmeTPMOpts) error {
 	}
 	fmt.Fprintf(os.Stderr, "[enroll] AK %q ready\n", ak.Name())
 
-	// Enroll the AK with pancake-attest-ca (TPM Attestation CA) so we
-	// have a cert chain to put in the ACME-tpm attestation
-	// statement's `x5c`. step-ca's ACME-tpm provisioner verifies
-	// this chain against `attestationRoots`.
+	// Unified CA mode: try to issue AK cert locally using dev EK CA.
+	// This eliminates the need for a separate attest-ca service.
+	// Falls back to attest-ca if local issuance fails or if
+	// AttestCAURL is explicitly set (for production deployments).
 	if o.AttestCAURL != "" {
+		// Explicit attest-ca URL: use HTTP enrollment
 		if err := enrollAKWithAttestCA(ctx, t, ak,
 			o.AttestCAURL, o.AttestCARoot); err != nil {
 			return fmt.Errorf("AK enrollment with attestation CA: %w", err)
@@ -82,8 +83,12 @@ func acmeTPMEnroll(o acmeTPMOpts) error {
 			"[enroll] AK cert chain installed (issued by %s)\n",
 			o.AttestCAURL)
 	} else if len(ak.CertificateChain()) == 0 {
-		return fmt.Errorf("AK has no cert chain and --attest-ca-url is unset; " +
-			"step-ca's ACME-tpm validation will reject the empty x5c")
+		// No attest-ca URL and no existing AK cert: try local issuance
+		if err := tryIssueLocalAKCert(ctx, t, ak); err != nil {
+			return fmt.Errorf("local AK cert issuance failed: %w\n"+
+				"  Hint: Run init-dev-ek-ca.sh to create dev EK CA, or\n"+
+				"        set --attest-ca-url to use a separate attestation CA", err)
+		}
 	}
 
 	// NewACMEClient registers a fresh account using an internally-

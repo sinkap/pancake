@@ -86,16 +86,6 @@ TPL
     # Add the ACME-tpm provisioner. `step ca provisioner add` writes
     # straight to the on-disk ca.json since the daemon isn't running
     # yet.
-    # Wait for pancake-attest-ca to publish its root cert to the
-    # shared trust volume so we can configure --attestation-roots on
-    # the ACME-tpm provisioner. Without that step-ca cannot verify
-    # the x5c chain of TPM AK attestations submitted via
-    # device-attest-01.
-    for i in $(seq 1 30); do
-        [ -s /pancake-trust/attest-ca-ak-root.crt ] && break
-        echo "[pancake-ca] waiting for attest-ca-root.crt ($i/30)"
-        sleep 1
-    done
 
     echo "[pancake-ca] adding ACME provisioner '$PROVISIONER_NAME' (device-attest-01 / tpm)"
     step ca provisioner add "$PROVISIONER_NAME" \
@@ -106,14 +96,16 @@ TPL
         --ca-config "$CA_HOME/config/ca.json" \
         2>&1 | sed 's/^/  /'
 
-    # step CLI 0.30 does not always write the attestationRoots field
-    # back to ca.json from --attestation-roots; inject it via jq so
-    # the ACME-tpm provisioner can verify x5c chains submitted by
-    # devices attested by pancake-attest-ca.
-    if [ -s /pancake-trust/attest-ca-ak-root.crt ]; then
+    # Inject dev EK CA root as attestationRoots so step-ca can verify
+    # EK cert chains from swtpm. In production with hardware TPMs,
+    # replace this with manufacturer roots (Intel/AMD/Infineon).
+    HOST_STATE="${PANCAKE_HOST_STATE:-/var/lib/pancake-host-state}"
+    EK_CA_ROOT="$HOST_STATE/dev-ek-ca/ca.crt"
+
+    if [ -s "$EK_CA_ROOT" ]; then
         # ACME provisioner's attestationRoots is a []byte in Go (a
         # PEM bundle), which marshals to/from JSON as a base64 string.
-        ROOT_B64=$(base64 -w0 < /pancake-trust/attest-ca-ak-root.crt)
+        ROOT_B64=$(base64 -w0 < "$EK_CA_ROOT")
         CFG="$CA_HOME/config/ca.json"
         cp "$CFG" "$CFG.bak"
         jq --arg pn "$PROVISIONER_NAME" --arg pem "$ROOT_B64" \
@@ -124,7 +116,10 @@ TPL
                 '.authority.provisioners |= map(if .name == $pn then .attestationRoots = $pem else . end)' \
                 "$CFG.bak" > "$CFG"
         }
-        echo "[pancake-ca] injected attestationRoots (base64 PEM) into provisioner '$PROVISIONER_NAME'"
+        echo "[pancake-ca] injected dev EK CA root as attestationRoots for provisioner '$PROVISIONER_NAME'"
+    else
+        echo "[pancake-ca] warning: dev EK CA root not found at $EK_CA_ROOT"
+        echo "[pancake-ca]   Run init-dev-ek-ca.sh before starting services"
     fi
 
     # Add a JWK provisioner for the code-signing flow. pancake-sign
@@ -188,6 +183,15 @@ fi
 if [ -d /pancake-trust ]; then
     cat "$CA_HOME/certs/intermediate_ca.crt" "$CA_HOME/certs/root_ca.crt" > /pancake-trust/trust-root.crt
     echo "[pancake-ca] published trust-root.crt (intermediate + root) to /pancake-trust"
+
+    # Also publish dev EK CA for unified CA mode (local AK cert issuance in VMs)
+    HOST_STATE="${PANCAKE_HOST_STATE:-/var/lib/pancake-host-state}"
+    if [ -d "$HOST_STATE/dev-ek-ca" ]; then
+        mkdir -p /pancake-trust/dev-ek-ca
+        cp "$HOST_STATE/dev-ek-ca/ca.crt" /pancake-trust/dev-ek-ca/ 2>/dev/null || true
+        cp "$HOST_STATE/dev-ek-ca/ca.key" /pancake-trust/dev-ek-ca/ 2>/dev/null || true
+        echo "[pancake-ca] published dev EK CA to /pancake-trust/dev-ek-ca"
+    fi
 fi
 
 # Publish operator host state to the bind-mount (idempotent, runs every boot).

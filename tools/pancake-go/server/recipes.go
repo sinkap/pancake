@@ -600,33 +600,39 @@ func (s *Server) bakePancakeHost(
 // ----- orch-config ---------------------------------------------------
 
 // bakeOrchConfig stages the per-deployment orchestrator-config layer:
-// two URLs (operator-supplied via params["ca-url"] +
-// params["attest-ca-url"]) plus the two TLS trust roots (read from
-// the build server's local trust volume — recipe carries no PEMs,
-// so the operator never extracts certs from running containers).
+// CA URL (operator-supplied via params["ca-url"]) plus the TLS trust
+// root (read from the build server's local trust volume — recipe
+// carries no PEMs, so the operator never extracts certs from running
+// containers).
+//
+// Unified CA mode (recommended):
+//   params["ca-url"] only, no params["attest-ca-url"]
+//   Layer contains: trust-root.crt (step-ca intermediate + root)
+//   VMs use dev EK CA for local AK cert issuance
+//
+// Legacy dual-CA mode (deprecated):
+//   params["ca-url"] + params["attest-ca-url"]
+//   Layer contains: trust-root.crt + attest-ca-root.crt
 //
 // Layer contents:
 //
-//   /etc/pancake/orch/trust-root.crt        PEM, step-ca's TLS root
-//   /etc/pancake/orch/attest-ca-root.crt    PEM, attest-ca's TLS root
-//   /etc/pancake/orch/config.json           {ca_url, attest_ca_url,
-//                                            trust_root, attest_ca_root,
-//                                            client_ca_root}
+//   /etc/pancake/orch/trust-root.crt     PEM, step-ca's TLS root
+//   /etc/pancake/orch/config.json        {ca_url, [attest_ca_url],
+//                                         trust_root, [attest_ca_root],
+//                                         client_ca_root}
 //
 // client_ca_root points at the same trust-root.crt — pancaked
 // validates incoming orchestrator mTLS against step-ca's root, since
-// the orchestrator's client cert is step-ca-issued. Production
-// deploys that want a distinct client-cert CA can swap the file via
-// volume mount.
+// the orchestrator's client cert is step-ca-issued.
 func (s *Server) bakeOrchConfig(
 	workRoot string, in *buildpb.PancakeInternal,
 ) (*buildpb.LayerHandle, error) {
 	caURL := strings.TrimSpace(in.Params["ca-url"])
-	attestURL := strings.TrimSpace(in.Params["attest-ca-url"])
-	if caURL == "" || attestURL == "" {
-		return nil, fmt.Errorf("orch-config: params[ca-url] + " +
-			"params[attest-ca-url] both required")
+	if caURL == "" {
+		return nil, fmt.Errorf("orch-config: params[ca-url] required")
 	}
+	attestURL := strings.TrimSpace(in.Params["attest-ca-url"])
+
 	if s.trustDir == "" {
 		return nil, fmt.Errorf("orch-config: server has no --trust-dir " +
 			"configured; cannot locate the TLS trust roots")
@@ -635,11 +641,6 @@ func (s *Server) bakeOrchConfig(
 	caRoot, err := os.ReadFile(caRootPath)
 	if err != nil {
 		return nil, fmt.Errorf("orch-config: read %s: %w", caRootPath, err)
-	}
-	attestRootPath := filepath.Join(s.trustDir, "attest-ca-root.crt")
-	attestRoot, err := os.ReadFile(attestRootPath)
-	if err != nil {
-		return nil, fmt.Errorf("orch-config: read %s: %w", attestRootPath, err)
 	}
 
 	staging, err := os.MkdirTemp(workRoot, "stage-orch-")
@@ -654,23 +655,57 @@ func (s *Server) bakeOrchConfig(
 		caRoot, 0o644); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(orchDir, "attest-ca-root.crt"),
-		attestRoot, 0o644); err != nil {
-		return nil, err
+
+	// Unified CA mode: include dev EK CA for local AK cert issuance
+	// This allows VMs to sign their own AK certs without calling attest-ca.
+	// Note: dev EK CA private key is included (for dev only - production
+	// should use hardware TPMs with manufacturer-signed EKs/AKs).
+	devEKCADir := filepath.Join(s.trustDir, "dev-ek-ca")
+	if _, err := os.Stat(filepath.Join(devEKCADir, "ca.crt")); err == nil {
+		ekCADir := filepath.Join(orchDir, "dev-ek-ca")
+		if err := os.MkdirAll(ekCADir, 0o755); err != nil {
+			return nil, err
+		}
+		// Copy dev EK CA cert and key
+		for _, f := range []string{"ca.crt", "ca.key"} {
+			src := filepath.Join(devEKCADir, f)
+			dst := filepath.Join(ekCADir, f)
+			data, err := os.ReadFile(src)
+			if err == nil {
+				os.WriteFile(dst, data, 0o644)
+			}
+		}
+		fmt.Fprintf(os.Stderr,
+			"[build-server] baked dev EK CA into orch-config layer\n")
 	}
+
 	cfg := struct {
 		CAURL        string `json:"ca_url"`
-		AttestCAURL  string `json:"attest_ca_url"`
+		AttestCAURL  string `json:"attest_ca_url,omitempty"`
 		TrustRoot    string `json:"trust_root"`
-		AttestCARoot string `json:"attest_ca_root"`
+		AttestCARoot string `json:"attest_ca_root,omitempty"`
 		ClientCARoot string `json:"client_ca_root"`
 	}{
 		CAURL:        caURL,
-		AttestCAURL:  attestURL,
 		TrustRoot:    "/etc/pancake/orch/trust-root.crt",
-		AttestCARoot: "/etc/pancake/orch/attest-ca-root.crt",
 		ClientCARoot: "/etc/pancake/orch/trust-root.crt",
 	}
+
+	// Legacy dual-CA mode: if attest-ca-url is set, include it
+	if attestURL != "" {
+		attestRootPath := filepath.Join(s.trustDir, "attest-ca-root.crt")
+		attestRoot, err := os.ReadFile(attestRootPath)
+		if err != nil {
+			return nil, fmt.Errorf("orch-config: read %s: %w", attestRootPath, err)
+		}
+		if err := os.WriteFile(filepath.Join(orchDir, "attest-ca-root.crt"),
+			attestRoot, 0o644); err != nil {
+			return nil, err
+		}
+		cfg.AttestCAURL = attestURL
+		cfg.AttestCARoot = "/etc/pancake/orch/attest-ca-root.crt"
+	}
+
 	cfgBytes, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return nil, err

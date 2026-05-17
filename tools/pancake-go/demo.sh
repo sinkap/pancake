@@ -16,15 +16,24 @@ log() { echo -e "${GREEN}[demo]${NC} $*"; }
 warn() { echo -e "${YELLOW}[demo]${NC} $*"; }
 error() { echo -e "${RED}[demo]${NC} $*"; exit 1; }
 
-# Step 1: Start Docker services
-log "Step 1/6: Starting Docker services..."
+# Step 1: Initialize dev EK CA
+log "Step 1/7: Initializing dev EK CA (one-time)..."
+if [ ! -f "pancake-host-state/dev-ek-ca/ca.crt" ]; then
+    ./init-dev-ek-ca.sh || error "Failed to initialize dev EK CA"
+    log "✓ Dev EK CA created"
+else
+    log "✓ Dev EK CA already exists"
+fi
+
+# Step 2: Start Docker services
+log "Step 2/7: Starting Docker services..."
 if ! docker compose ps | grep -q "pancake-ca-server.*Up"; then
     docker compose up -d --wait || error "Failed to start Docker services"
 fi
 log "✓ Services running"
 
-# Step 2: Initialize host certificates
-log "Step 2/6: Initializing operator host certificates..."
+# Step 3: Initialize host certificates
+log "Step 3/7: Initializing operator host certificates..."
 if [ ! -f "pancake-host-state/pancake.env" ]; then
     pancake host-cert init || error "Failed to initialize host cert"
     log "✓ Host cert initialized"
@@ -32,13 +41,13 @@ else
     log "✓ Host cert already exists"
 fi
 
-# Step 3: Source environment
-log "Step 3/6: Loading credentials..."
+# Step 4: Source environment
+log "Step 4/7: Loading credentials..."
 source pancake-host-state/pancake.env
 log "✓ Credentials loaded"
 
-# Step 4: Bootstrap VM image
-log "Step 4/6: Bootstrapping VM image..."
+# Step 5: Bootstrap VM image
+log "Step 5/7: Bootstrapping VM image..."
 if [ ! -f "pancake-efi.img" ]; then
     pancake bootstrap || error "Bootstrap failed"
     log "✓ Bootstrap complete"
@@ -46,8 +55,8 @@ else
     warn "EFI image exists, skipping bootstrap (run ./clean-state.sh to rebuild)"
 fi
 
-# Step 5: Boot VM
-log "Step 5/6: Booting VM..."
+# Step 6: Boot VM
+log "Step 6/7: Booting VM..."
 ./boot-vm.sh &
 BOOT_PID=$!
 
@@ -83,8 +92,8 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-# Step 6: Test attestation
-log "Step 6/6: Testing TPM attestation..."
+# Step 7: Test attestation
+log "Step 7/7: Testing TPM attestation..."
 MAX_RETRIES=5
 RETRY_DELAY=3
 for attempt in $(seq 1 $MAX_RETRIES); do

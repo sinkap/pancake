@@ -377,19 +377,22 @@ type bootstrapArgs struct {
 	Orch OrchArgs
 }
 
-// OrchArgs mirrors recipe.Orchestrator. Two URLs reflect the two
-// independent services (step-ca's ACME endpoint + pancake-attest-ca);
-// trust material is a build-server concern (it reads PEMs from its
-// own trust volume), not in the recipe.
+// OrchArgs mirrors recipe.Orchestrator.
+//
+// Unified CA mode (recommended): CAURL only
+//   VMs get AK certs locally from dev EK CA
+//
+// Legacy dual-CA mode: CAURL + AttestCAURL
+//   VMs call separate attestation CA for AK certs
 type OrchArgs struct {
 	CAURL       string
 	AttestCAURL string
 }
 
-// hasURLs reports whether both orchestrator URLs were provided in
-// the recipe. When false, the orch-config layer is not built.
+// hasURLs reports whether orchestrator URLs were provided.
+// Only CAURL is required; AttestCAURL is optional (unified CA mode).
 func (o OrchArgs) hasURLs() bool {
-	return o.CAURL != "" && o.AttestCAURL != ""
+	return o.CAURL != ""
 }
 
 

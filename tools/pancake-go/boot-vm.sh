@@ -79,13 +79,21 @@ fi
 # Initialize TPM state if needed
 if [ ! -d "$SWTPM_DIR/tpm2" ]; then
     echo "[boot] initializing TPM state"
+
+    # swtpm_setup creates a self-signed EK cert by default.
+    # For unified CA, we rely on local AK cert issuance in the VM
+    # (using dev EK CA baked into the image) instead of EK cert validation.
     swtpm_setup --tpm2 \
         --tpmstate "$SWTPM_DIR" \
         --createek --decryption --create-ek-cert \
         --create-platform-cert \
         --lock-nvram \
         --not-overwrite \
-        --display
+        --display \
+        --vmid "pancake-vm-$$"
+
+    echo "[boot] TPM initialized with self-signed EK cert"
+    echo "[boot] VM will sign AK cert locally using dev EK CA baked into image"
 fi
 
 # Start swtpm

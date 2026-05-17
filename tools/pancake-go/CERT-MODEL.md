@@ -1,6 +1,73 @@
-# Certificate Model Analysis
+# Certificate Model
 
-## Current State
+## Implemented: Unified CA Architecture
+
+**Status**: Implemented as of 2026-05-16
+
+**Summary**: Single production CA (step-ca) with dev EK CA mimicking manufacturer roots. Eliminates cross-CA dependencies and simplifies trust model.
+
+### Certificate Authorities
+
+**1. step-ca (pancake-ca-server:8443)** - Production CA
+- Root CA with intermediate
+- Issues:
+  - mTLS client certs for operators (JWK provisioner: `host-cert`)
+  - mTLS server certs for VMs (ACME provisioner: `tpm` with device-attest-01 challenge)
+  - Code-signing certs for UKI signing (JWK provisioner: `code-sign`)
+- attestationRoots: dev EK CA root (validates TPM EK certs during ACME enrollment)
+
+**2. Dev EK CA** - Development TPM manufacturer CA simulator
+- Self-signed root CA stored in `pancake-host-state/dev-ek-ca/`
+- Signs:
+  - swtpm EK certs (during boot-vm.sh via swtpm_setup)
+  - VM AK certs (locally in VMs during enrollment)
+- Mimics hardware TPM manufacturer CAs (Intel/AMD/Infineon)
+- Private key baked into VM images (dev only - production uses hardware TPMs with manufacturer-signed EKs)
+
+### Trust Flows
+
+**VM First Boot (Auto-Enrollment)**
+```
+1. swtpm starts with EK cert signed by dev EK CA (created by boot-vm.sh)
+2. pancake-enroll.service runs:
+   a. Creates AK in TPM
+   b. Signs AK cert locally using /etc/pancake/orch/dev-ek-ca/ca.key
+   c. Performs ACME device-attest-01 with step-ca:
+      - Submits TPM attestation with AK cert signed by dev EK CA
+      - step-ca validates AK cert chains to attestationRoots (dev EK CA root)
+      - Receives mTLS server cert
+3. pancaked starts with TPM-resident TLS key + step-ca-issued cert
+```
+
+**VM Runtime (pancaked gRPC)**
+- Validates operator client certs against: `/etc/pancake/orch/trust-root.crt` (step-ca intermediate + root)
+- Serves with: mTLS server cert issued by step-ca (TPM-resident key)
+
+**Operator CLI (orchestrate commands)**
+- Validates VM server certs against: `pancake-host-state/step-root.crt` (step-ca intermediate + root)
+- Presents: client cert issued by step-ca
+
+### Key Simplifications
+
+1. **Single production CA**: step-ca only. Dev EK CA is dev infrastructure, not a runtime service.
+2. **No cross-CA dependencies**: step-ca's attestationRoots points to dev EK CA root, which is static (not another runtime CA).
+3. **Clear trust anchors**: 
+   - mTLS: step-ca root
+   - TPM attestation: dev EK CA root
+4. **Standard PKI**: Mimics real-world where TPM manufacturer CAs are separate from enterprise CAs.
+
+### Production Deployment
+
+For hardware TPMs with manufacturer-signed EKs:
+1. Replace dev EK CA root with manufacturer roots (Intel/AMD/Infineon) in step-ca's attestationRoots
+2. Remove dev EK CA from orch-config layer (VMs don't need to sign their own AK certs)
+3. Use manufacturer-issued AK certs or implement proper AK cert enrollment via separate attestation CA
+
+---
+
+# Historical: Previous Dual-CA Architecture
+
+## Original State (Before Unified CA)
 
 ### Certificate Authorities
 

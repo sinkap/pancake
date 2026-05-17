@@ -5,22 +5,25 @@ Attested filesystem integrity system with dm-verity layers and TPM-backed auto-e
 ## Quick Start
 
 ```bash
-# 1. Start services (step-ca, attest-ca, build-server, sign-server)
+# 1. Initialize dev EK CA (one-time, mimics TPM manufacturer CA)
+./init-dev-ek-ca.sh
+
+# 2. Start services (step-ca, build-server, sign-server)
 docker compose up -d --wait
 
-# 2. Initialize operator credentials
+# 3. Initialize operator credentials
 pancake host-cert init
 
-# 3. Load credentials into environment
+# 4. Load credentials into environment
 source pancake-host-state/pancake.env
 
-# 4. Bootstrap VM image (builds layers, signs manifest, creates bootable EFI image)
+# 5. Bootstrap VM image (builds layers, signs manifest, creates bootable EFI image)
 pancake bootstrap
 
-# 5. Boot VM with QEMU + TPM emulation
+# 6. Boot VM with QEMU + TPM emulation
 ./boot-vm.sh
 
-# 6. Wait ~30 seconds for auto-enrollment, then test attestation
+# 7. Wait ~30 seconds for auto-enrollment, then test attestation
 pancake orchestrate attest --target localhost:7878
 ```
 
@@ -31,47 +34,58 @@ Or run the automated demo:
 
 ## What Just Happened
 
-1. **Docker services started**: step-ca (ACME CA), attest-ca (TPM attestation CA), build-server (layer builder), sign-server (manifest signer)
+1. **Dev EK CA created**: One-time setup generating a root CA that mimics TPM manufacturer CAs (Intel/AMD/Infineon). In production, you'd use real manufacturer roots.
 
-2. **Operator enrolled**: `pancake host-cert init` got you an mTLS client certificate from step-ca for authenticating to orchestrator services
+2. **Docker services started**: step-ca (unified CA for mTLS), build-server (layer builder), sign-server (manifest signer)
 
-3. **VM image built**: 
+3. **Operator enrolled**: `pancake host-cert init` got you an mTLS client certificate from step-ca for authenticating to orchestrator services
+
+4. **VM image built**: 
    - Build server assembled dm-verity layers (APT packages + pancake runtime + custom kernel)
+   - Baked dev EK CA into orch-config layer (for local AK cert issuance)
    - Sign server signed the manifest
    - Assembled bootable EFI image with initramfs + kernel
 
-4. **VM booted**: QEMU with UEFI firmware + swtpm (software TPM 2.0)
+5. **VM booted**: QEMU with UEFI firmware + swtpm (software TPM 2.0 with EK cert signed by dev EK CA)
 
-5. **Auto-enrollment**: 
+6. **Auto-enrollment**: 
    - VM's `pancake-enroll.service` ran on first boot
-   - Used TPM to attest to attest-ca, got AK certificate
-   - Used AK cert to enroll via ACME device-attest-01, got TLS cert
+   - Created AK in TPM, signed AK cert locally using dev EK CA (baked into VM)
+   - Enrolled via ACME device-attest-01, step-ca validated EK cert against dev EK CA root
+   - Received mTLS server cert from step-ca
    - pancaked started with TPM-backed TLS cert
 
-6. **Attestation**: Operator requested TPM quote with nonce, VM responded with signed PCR values
+7. **Attestation**: Operator requested TPM quote with nonce, VM responded with signed PCR values
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ Host (operator machine)                                     │
-│                                                              │
-│  pancake CLI ──────────────────┐                            │
-│    │                            │                            │
-│    │ mTLS                       │ mTLS                       │
-│    ↓                            ↓                            │
-│  Docker Compose:                                            │
-│    ┌──────────────┐  ┌──────────────┐  ┌─────────────┐     │
-│    │  step-ca     │  │  attest-ca   │  │build-server │     │
-│    │  :8443       │  │  :8444       │  │  :7879      │     │
-│    └──────────────┘  └──────────────┘  └─────────────┘     │
-│                                                              │
-│  QEMU VM (port-forwarded):                                  │
-│    ┌─────────────────────────────────────────┐             │
-│    │  pancaked :7878 (mTLS, TPM-backed cert) │             │
-│    │  SSH :22 (forwarded to host :2222)      │             │
-│    └─────────────────────────────────────────┘             │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│ Host (operator machine)                                        │
+│                                                                 │
+│  Dev EK CA (one-time): pancake-host-state/dev-ek-ca/           │
+│    ├─ ca.crt (public, baked into VMs)                          │
+│    └─ ca.key (private, signs swtpm EK + AK certs)              │
+│                                                                 │
+│  pancake CLI ──────────────┐                                   │
+│    │ mTLS                   │                                   │
+│    ↓                        ↓                                   │
+│  Docker Compose:                                               │
+│    ┌──────────────┐  ┌─────────────┐                           │
+│    │  step-ca     │  │build-server │  Unified CA:              │
+│    │  :8443       │  │  :7879      │  - step-ca issues mTLS    │
+│    └──────────────┘  └─────────────┘  - dev EK CA signs TPM    │
+│                                                                 │
+│  QEMU VM (port-forwarded):                                     │
+│    ┌──────────────────────────────────────────┐               │
+│    │  swtpm: EK signed by dev EK CA           │               │
+│    │  pancaked :7878 (mTLS, TPM-backed cert)  │               │
+│    │  SSH :22 (forwarded to host :2222)       │               │
+│    │                                           │               │
+│    │  /etc/pancake/orch/dev-ek-ca/ (baked in) │               │
+│    │    └─ VM signs own AK cert on first boot │               │
+│    └──────────────────────────────────────────┘               │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 ## Files and Directories

@@ -227,14 +227,18 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 	})
 	addInternal("pancake-host", "", hostBlobs)
 	if a.Orch.hasURLs() {
+		params := map[string]string{
+			"ca-url": a.Orch.CAURL,
+		}
+		// Only include attest-ca-url if set (legacy dual-CA mode)
+		if a.Orch.AttestCAURL != "" {
+			params["attest-ca-url"] = a.Orch.AttestCAURL
+		}
 		packages = append(packages, &buildpb.Package{
 			Manager: &buildpb.Package_Internal{
 				Internal: &buildpb.PancakeInternal{
 					Recipe: "orch-config",
-					Params: map[string]string{
-						"ca-url":        a.Orch.CAURL,
-						"attest-ca-url": a.Orch.AttestCAURL,
-					},
+					Params: params,
 				},
 			},
 		})

@@ -1,15 +1,15 @@
 # Brings up the pancake orchestrator-side stack:
 #
 #   pancake-ca-server     step-ca, ACME-tpm provisioner       :8443
-#   pancake-attest-ca     TPM AK Attestation CA               :8444
 #   pancake-build-server  gRPC layer cache + builder          :7879
 #   pancake-sign          UKI + manifest signing service      :7880
 #
-# Shared volume `pancake-trust` carries the gateway's TLS trust root
-# (step-ca's root cert) — written by pancake-ca-server's init.sh on
-# first boot, consumed RO by pancake-build-server when baking the
-# orch-config layer. Operators never extract certs from running
-# containers.
+# Unified CA architecture: single step-ca for mTLS certs. TPM attestation
+# uses dev EK CA (mimics manufacturer roots) with local AK cert issuance.
+#
+# Shared volume `pancake-trust` carries step-ca's root cert and dev EK CA,
+# written by pancake-ca-server's init.sh, consumed RO by pancake-build-server
+# when baking the orch-config layer.
 #
 # Run from this directory:
 #
@@ -35,8 +35,6 @@ services:
     image: pancake-ca-server:local
     container_name: pancake-ca-server
     depends_on:
-      pancake-attest-ca:
-        condition: service_started
       pancake-trust-init:
         condition: service_completed_successfully
     ports:
@@ -54,24 +52,6 @@ services:
       - pancake-trust:/pancake-trust
       # Bind-mount for operator-visible host state: JWK password,
       # trust roots, ca-url. Replaces docker exec/cp round-trips.
-      - ./pancake-host-state:/var/lib/pancake-host-state
-
-  pancake-attest-ca:
-    build:
-      context: .
-      dockerfile: attest-ca/Dockerfile
-    image: pancake-attest-ca:local
-    container_name: pancake-attest-ca
-    ports:
-      - "8444:8444"
-    environment:
-      PANCAKE_HOST_STATE: /var/lib/pancake-host-state
-    volumes:
-      - pancake-attest-ca-state:/home/attestca
-      # Publishes /pancake-trust/attest-ca-root.crt on first boot
-      # so pancake-build-server picks it up without HTTP fetch.
-      - pancake-trust:/pancake-trust
-      # Bind-mount for operator-visible attest CA root
       - ./pancake-host-state:/var/lib/pancake-host-state
 
   pancake-build-server:
@@ -123,7 +103,6 @@ services:
 
 volumes:
   pancake-ca-state:
-  pancake-attest-ca-state:
   pancake-build-cache:
   pancake-sign-state:
   pancake-trust:
