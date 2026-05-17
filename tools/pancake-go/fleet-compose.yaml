@@ -1,0 +1,50 @@
+# pancake-fleet-server local development stack.
+#
+# Brings up:
+#   pancake-fleet-db      PostgreSQL 16             :5433 (host)
+#   pancake-fleet-server  HTTP REST + gRPC API      :8080 (HTTP), :8081 (gRPC)
+#
+# Usage from this directory:
+#   docker compose -f fleet-compose.yaml up -d --build
+#
+# Schema is auto-migrated on first server start.
+# State persists in the pancake-fleet-db-data volume.
+
+services:
+  pancake-fleet-db:
+    image: postgres:16-alpine
+    container_name: pancake-fleet-db
+    environment:
+      POSTGRES_DB: pancake_fleet
+      POSTGRES_USER: pancake
+      POSTGRES_PASSWORD: pancake-dev
+    ports:
+      - "5433:5432"        # 5433 on host to avoid clashing with a local postgres
+    volumes:
+      - pancake-fleet-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pancake -d pancake_fleet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pancake-fleet-server:
+    build:
+      context: ../..
+      dockerfile: tools/pancake-go/fleet-server/Dockerfile
+    image: pancake-fleet-server:local
+    container_name: pancake-fleet-server
+    depends_on:
+      pancake-fleet-db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"        # HTTP REST + UI
+      - "8081:8081"        # gRPC FleetManager
+    environment:
+      DATABASE_URL: postgres://pancake:pancake-dev@pancake-fleet-db:5432/pancake_fleet?sslmode=disable
+    command:
+      - "-http-addr=:8080"
+      - "-grpc-addr=:8081"
+
+volumes:
+  pancake-fleet-db-data:

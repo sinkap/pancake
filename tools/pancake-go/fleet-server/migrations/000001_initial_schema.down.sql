@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS fleet_events;
+DROP TABLE IF EXISTS expected_pcrs;
+DROP TABLE IF EXISTS attestation_log;
+DROP TABLE IF EXISTS vms;

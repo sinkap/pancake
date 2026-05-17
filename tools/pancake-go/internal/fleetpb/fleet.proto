@@ -1,0 +1,102 @@
+// pancake-fleet-server protocol.
+//
+// VMs call Enroll on boot to register themselves with the fleet.
+// Operators (or background workers) call list/attest RPCs to inspect
+// + verify the fleet.
+//
+// Pancaked on each VM already exposes the Attest RPC (see orchpb).
+// The fleet server is the orchestrator-side aggregator: it discovers
+// VMs (auto-registered via Enroll), polls them for attestations,
+// stores results in PostgreSQL, and surfaces the data via the web UI.
+
+syntax = "proto3";
+
+package pancake.fleet.v1;
+
+option go_package =
+    "github.com/sinkap/pancake/tools/pancake-go/internal/fleetpb";
+
+import "google/protobuf/timestamp.proto";
+
+service FleetManager {
+  // Enroll registers a VM with the fleet. Called on first boot.
+  // Idempotent: re-calling with the same name updates the existing row
+  // (refreshes metadata, IP, certificate info).
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+
+  // Heartbeat updates last_heartbeat on the VM's row. Cheap; called
+  // every minute or so from VMs to signal liveness.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // ListVMs returns all known VMs (paginated, filterable). Used by
+  // the web UI and the attestation poller.
+  rpc ListVMs(ListVMsRequest) returns (ListVMsResponse);
+
+  // GetVM fetches one VM by name or id (one-of in request).
+  rpc GetVM(GetVMRequest) returns (VM);
+}
+
+message EnrollRequest {
+  string name        = 1;  // unique VM identifier (hostname or GCE instance name)
+  string platform    = 2;  // "self-hosted", "gce", ...
+  string internal_ip = 3;
+  string external_ip = 4;  // optional
+  string cert_serial = 5;  // PEM serial number, hex
+  google.protobuf.Timestamp cert_expires_at = 6;
+  int32  current_generation = 7;
+
+  // metadata is a JSON blob (string-encoded) for platform-specific
+  // info (e.g. GCE labels, instance ID). Stored as JSONB.
+  string metadata_json = 8;
+}
+
+message EnrollResponse {
+  int32  id       = 1;  // assigned vm id
+  string message  = 2;  // human-readable status
+}
+
+message HeartbeatRequest {
+  string name = 1;
+  int32  current_generation = 2;
+}
+
+message HeartbeatResponse {}
+
+message ListVMsRequest {
+  // Filter by platform ("gce", "self-hosted", ""=all)
+  string platform = 1;
+  // Filter by attestation status ("valid", "failed", "never", "quarantined", ""=all)
+  string attestation_status = 2;
+  // Pagination
+  int32 page_size  = 3;  // default 100, max 1000
+  int32 page_token = 4;  // offset; 0 = first page
+}
+
+message ListVMsResponse {
+  repeated VM vms = 1;
+  int32 next_page_token = 2;  // 0 = no more pages
+  int32 total = 3;
+}
+
+message GetVMRequest {
+  oneof id {
+    string name = 1;
+    int32  vm_id = 2;
+  }
+}
+
+message VM {
+  int32  id              = 1;
+  string name            = 2;
+  string platform        = 3;
+  string internal_ip     = 4;
+  string external_ip     = 5;
+  google.protobuf.Timestamp enrolled_at   = 6;
+  string cert_serial     = 7;
+  google.protobuf.Timestamp cert_expires_at = 8;
+  google.protobuf.Timestamp last_heartbeat   = 9;
+  google.protobuf.Timestamp last_attestation = 10;
+  string attestation_status = 11;
+  int32  current_generation = 12;
+  string metadata_json   = 13;
+}
