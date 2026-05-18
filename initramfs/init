@@ -20,11 +20,14 @@ mount -t proc     proc     /proc
 mount -t sysfs    sys      /sys
 mount -t devtmpfs dev      /dev
 
-echo "[init] modprobe dm-mod dm-verity overlay ext4"
+echo "[init] modprobe dm-mod dm-verity overlay ext4 squashfs"
 /sbin/modprobe dm-mod 2>/dev/null || true
 /sbin/modprobe dm-verity 2>/dev/null || /sbin/modprobe dm_verity
 /sbin/modprobe overlay
 /sbin/modprobe ext4 2>/dev/null || true
+# Per-layer images are squashfs (zstd) under dm-verity. ext4 stays in the
+# list above for the state partition (RW; holds /var/lib/pancake).
+/sbin/modprobe squashfs 2>/dev/null || true
 
 # Resolve a virtio-blk serial → /dev/vdX. (Identical helper to vm/init.)
 find_by_serial() {

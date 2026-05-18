@@ -1,10 +1,13 @@
 // Package layer turns a staged directory into one verity layer:
 //
-//	staging/    →  out_img (ext4) + out_img.with_suffix(".hash") + roothash
+//	staging/    →  out_img (squashfs) + out_img.with_suffix(".hash") + roothash
 //
-// Mirrors pancake_lib.make_verity_image. We don't activate dm-verity here
-// (that's a runtime concern, handled by sandbox.MaterializeCurrent and the
-// initramfs); we just produce the image+hash files.
+// We don't activate dm-verity here (that's a runtime concern, handled
+// by sandbox.MaterializeCurrent and the initramfs); we just produce
+// the image + hash files. dm-verity is filesystem-agnostic — it
+// operates on the underlying block device — so squashfs works
+// identically to ext4 for the integrity story, with the added benefit
+// of zstd compression (typically 30-50% smaller layers).
 package layer
 
 import (
@@ -23,40 +26,32 @@ import (
 
 var roothashRe = regexp.MustCompile(`Root hash:\s+([0-9a-f]+)`)
 
-// MakeVerity builds an ext4 image at outImg containing staging/, then runs
-// veritysetup format to produce the sidecar outImg+".hash" file. Returns
-// the verity root hash (hex) and the data partition size in bytes (for
-// the manifest's data-size field).
+// MakeVerity builds a squashfs image at outImg from the contents of
+// staging/, then runs veritysetup format to produce the sidecar
+// outImg+".hash". Returns the verity root hash (hex) and the data
+// partition size in bytes (for the manifest's data-size field).
 //
-// Sizing: take `du -sk staging`, scale up 1.4x to leave overlay slack,
-// add 32MB for ext4 metadata, round to 4K. Floor at minMiB if non-zero.
+// No sizing math: mksquashfs writes exactly the bytes it needs. The
+// minMiB argument is kept for API compatibility but ignored (the old
+// ext4 path inflated to leave overlay slack; squashfs is read-only so
+// the inflation was always meaningless for layer images).
 //
-// If seed != "", deterministic mkfs.ext4 + veritysetup flags are derived
-// from it: the ext4 filesystem UUID and directory hash seed, and the
-// verity hash-tree salt + UUID. Callers should pass the layer slug
-// (name + slugified-version) so two machines building the same package
-// produce identical bytes → identical verity roothash. This is the
-// foundation for "VM reconstructs missing layers from apt and the
-// orchestrator-pushed manifest still validates".
+// If seed != "", deterministic squashfs + veritysetup flags are
+// derived from it: SOURCE_DATE_EPOCH + verity salt/UUID. With these
+// and identical input files, mksquashfs produces a bit-identical
+// image — which is what `pancake serve`'s auto-install path needs so
+// the local rebuild's verity roothash matches the orchestrator-pushed
+// manifest's claim.
 //
-// seed == "" preserves the legacy non-deterministic behavior for callers
-// that don't care about reproducibility (e.g., one-off `pancake build`).
+// seed == "" preserves the legacy non-deterministic behavior for
+// callers that don't care about reproducibility (e.g., one-off
+// `pancake build`).
+//
+// The `label` argument is unused (ext4 supported volume labels;
+// squashfs doesn't). Kept for API compatibility.
 func MakeVerity(staging, outImg, label string, minMiB int, seed string) (string, int64, error) {
-	duOut, err := runner.Capture(runner.Cmd{
-		Argv: []string{"du", "-sk", staging}, Sudo: true,
-	})
-	if err != nil {
-		return "", 0, err
-	}
-	duKB, err := strconv.Atoi(strings.Fields(strings.TrimSpace(duOut))[0])
-	if err != nil {
-		return "", 0, fmt.Errorf("parse du output: %w", err)
-	}
-	dataKB := ((duKB*14/10 + 32*1024) + 3) / 4 * 4
-	if minMiB > 0 && dataKB < minMiB*1024 {
-		dataKB = minMiB * 1024
-	}
-	dataSize := int64(dataKB) * 1024
+	_ = label // squashfs has no volume label; keep arg for ABI compat
+	_ = minMiB
 
 	if err := os.MkdirAll(filepath.Dir(outImg), 0o755); err != nil {
 		return "", 0, err
@@ -65,48 +60,37 @@ func MakeVerity(staging, outImg, label string, minMiB int, seed string) (string,
 	outHash := strings.TrimSuffix(outImg, filepath.Ext(outImg)) + ".hash"
 	_ = os.Remove(outHash)
 
-	if err := runner.Run(runner.Cmd{
-		Argv: []string{"truncate", "-s", fmt.Sprintf("%dK", dataKB), outImg},
-	}); err != nil {
+	// mksquashfs reads everything under staging/, compresses with zstd
+	// (best size/speed trade-off for the read-mostly workload), strips
+	// ownership and timestamps so the output is bit-deterministic for
+	// identical inputs.
+	mkArgs := []string{
+		"mksquashfs", staging, outImg,
+		"-no-progress",
+		"-quiet",
+		"-noappend",     // overwrite outImg (we removed it but be explicit)
+		"-all-root",     // uid/gid -> 0
+		"-no-xattrs",    // mirrors old ext4 no_copy_xattrs
+		"-comp", "zstd",
+		"-Xcompression-level", "9",
+	}
+	// 2020-01-01T00:00:00Z, pinned because file CONTENT is what verity
+	// covers; timestamps just need to match byte-for-byte across host
+	// and VM. mksquashfs 4.6+ refuses if both SOURCE_DATE_EPOCH and
+	// the -mkfs-time/-all-time flags are set — we use the flags
+	// directly and DO NOT set the env to keep that conflict away.
+	mkfsTime := "1577836800"
+	if seed != "" {
+		mkArgs = append(mkArgs,
+			"-mkfs-time", mkfsTime,
+			"-all-time", mkfsTime,
+		)
+	}
+	if err := runner.Run(runner.Cmd{Argv: mkArgs, Sudo: true}); err != nil {
 		return "", 0, err
 	}
-	// labels are limited to 16 chars on ext4
-	if len(label) > 16 {
-		label = label[:16]
-	}
-	mkfsArgs := []string{"mkfs.ext4", "-q", "-F", "-L", label,
-		"-d", staging}
-	eOpts := "no_copy_xattrs"
-	if seed != "" {
-		// Deterministic UUID + dir-hash seed, both derived from the
-		// caller-supplied seed (typically the layer slug). With these
-		// flags + identical input files, mkfs.ext4 produces a bytewise
-		// identical image — which is what `pancake serve`'s auto-install
-		// path needs so the local rebuild's verity roothash matches the
-		// orchestrator-pushed manifest's claim.
-		h := sha256.Sum256([]byte(seed))
-		uuid := formatUUID(h[:16])
-		hashSeed := formatUUID(h[16:32])
-		mkfsArgs = append(mkfsArgs, "-U", uuid)
-		eOpts += ",hash_seed=" + hashSeed
-	}
-	mkfsArgs = append(mkfsArgs, "-E", eOpts, outImg)
-	mkfsCmd := runner.Cmd{Argv: mkfsArgs, Sudo: true}
-	if seed != "" {
-		// SOURCE_DATE_EPOCH is the cross-tool reproducibility convention
-		// (https://reproducible-builds.org/docs/source-date-epoch/).
-		// e2fsprogs honors it for all inode timestamps, which is the
-		// last common source of mkfs.ext4 non-determinism beyond UUID
-		// and hash_seed. Pin to 1577836800 (2020-01-01T00:00:00Z) — a
-		// fixed value works because file CONTENT is what dm-verity
-		// covers; the timestamps are just metadata that needs to match
-		// byte-for-byte across host and VM.
-		mkfsCmd.Env = []string{"SOURCE_DATE_EPOCH=1577836800"}
-	}
-	if err := runner.Run(mkfsCmd); err != nil {
-		return "", 0, err
-	}
-	// hand the image back to the invoking user so subsequent ops (TOML
+
+	// Hand the image back to the invoking user so subsequent ops (TOML
 	// writes, repo-dir packaging) don't need sudo.
 	uid := strconv.Itoa(syscall.Getuid())
 	gid := strconv.Itoa(syscall.Getgid())
@@ -115,11 +99,19 @@ func MakeVerity(staging, outImg, label string, minMiB int, seed string) (string,
 	}); err != nil {
 		return "", 0, err
 	}
+	// veritysetup wants the hash file to exist before format.
 	if f, err := os.Create(outHash); err != nil {
 		return "", 0, err
 	} else {
 		f.Close()
 	}
+
+	// dataSize = bytes of the squashfs blob (the data device verity covers).
+	fi, err := os.Stat(outImg)
+	if err != nil {
+		return "", 0, err
+	}
+	dataSize := fi.Size()
 
 	verityArgs := []string{"veritysetup", "format"}
 	if seed != "" {

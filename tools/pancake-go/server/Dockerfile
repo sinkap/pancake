@@ -62,6 +62,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         mmdebstrap \
         e2fsprogs \
+        squashfs-tools \
         cryptsetup-bin \
         dpkg \
         sudo \
