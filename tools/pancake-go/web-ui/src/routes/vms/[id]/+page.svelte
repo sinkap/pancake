@@ -50,6 +50,10 @@
 		try {
 			const r = await api.attestVM(id);
 			attestMsg = r.message ?? r.status;
+			// Refresh both the VM (status flips to valid/failed) and the
+			// attestation list (the new row should appear at the top)
+			// without waiting for the next poll tick.
+			refresh();
 		} catch (e) {
 			attestMsg = `error: ${String(e)}`;
 		} finally {

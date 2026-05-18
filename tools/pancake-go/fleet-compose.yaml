@@ -64,7 +64,7 @@ services:
       - "-attest-cert-file=/var/lib/pancake-host-state/client.crt"
       - "-attest-key-file=/var/lib/pancake-host-state/client.key"
       - "-attest-server-name=pancake-demo"
-      - "-attest-interval=30s"
+      - "-attest-interval=1h"
       - "-attest-tofu"
 
 volumes:

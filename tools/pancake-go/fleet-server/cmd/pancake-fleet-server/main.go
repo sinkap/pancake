@@ -39,7 +39,7 @@ func main() {
 	skipMigrate := flag.Bool("skip-migrate", false, "skip migrations on startup")
 
 	// Attestation poller flags
-	pollInterval := flag.Duration("attest-interval", 60*time.Second,
+	pollInterval := flag.Duration("attest-interval", time.Hour,
 		"how often to attest every VM (0 = disable polling)")
 	pollConcurrency := flag.Int("attest-concurrency", 10,
 		"max parallel Attest RPCs per sweep")

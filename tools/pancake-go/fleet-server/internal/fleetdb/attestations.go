@@ -77,6 +77,47 @@ UPDATE vms
 
 // ListAttestations returns attestations for a single VM (most recent first).
 // If vmID == 0, returns across the whole fleet.
+// ListLatestPerVM returns at most one row per vm — its newest attestation.
+// Backs the default /attestations view: O(fleet size) rows rather than the
+// flat firehose of every poll. Empty when no VMs have been attested yet.
+func (db *DB) ListLatestPerVM(ctx context.Context) ([]Attestation, error) {
+	// DISTINCT ON (vm_id) collapses to one row per VM; the inner ORDER BY
+	// then picks the most recent. Outer ORDER BY shows newest at the top.
+	const q = `
+SELECT id, vm_id, timestamp, nonce, pcrs::text, quote, signature,
+       ak_pub, ek_pub, verification_status,
+       COALESCE(verification_error, '') AS verification_error,
+       event_log, attestation_mode,
+       COALESCE(ek_cert_serial, '') AS ek_cert_serial,
+       ek_chain_verified
+  FROM (
+    SELECT DISTINCT ON (vm_id) *
+      FROM attestation_log
+     ORDER BY vm_id, timestamp DESC
+  ) latest
+ ORDER BY timestamp DESC`
+	rows, err := db.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Attestation
+	for rows.Next() {
+		var a Attestation
+		if err := rows.Scan(
+			&a.ID, &a.VMID, &a.Timestamp, &a.Nonce, &a.PCRs,
+			&a.Quote, &a.Signature, &a.AKPub, &a.EKPub,
+			&a.VerificationStatus, &a.VerificationError,
+			&a.EventLog, &a.AttestationMode,
+			&a.EKCertSerial, &a.EKChainVerified,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 func (db *DB) ListAttestations(ctx context.Context, vmID int32, limit int) ([]Attestation, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 100

@@ -54,6 +54,22 @@ func toAttestationJSON(a fleetdb.Attestation) attestationJSON {
 	return j
 }
 
+// listLatestAttestations: one row per VM (its newest attestation).
+// O(fleet) rows rather than O(fleet × polls), so the default /attestations
+// view stays small even when the poller runs for weeks.
+func (a *API) listLatestAttestations(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.DB.ListLatestPerVM(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]attestationJSON, 0, len(rows))
+	for _, x := range rows {
+		out = append(out, toAttestationJSON(x))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"attestations": out})
+}
+
 func (a *API) listAttestations(w http.ResponseWriter, r *http.Request) {
 	limit := int(queryInt(r, "limit", 100))
 	rows, err := a.DB.ListAttestations(r.Context(), 0, limit)

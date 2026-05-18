@@ -38,6 +38,7 @@ func (a *API) Routes() *http.ServeMux {
 
 	// Attestations (fleet-wide)
 	mux.HandleFunc("GET /api/v1/attestations", a.listAttestations)
+	mux.HandleFunc("GET /api/v1/attestations/latest", a.listLatestAttestations)
 
 	// Stats
 	mux.HandleFunc("GET /api/v1/stats", a.stats)

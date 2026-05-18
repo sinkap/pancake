@@ -43,6 +43,11 @@ export const api = {
 		return getJSON<AttestationListResponse>(`/attestations?limit=${limit}`);
 	},
 
+	// One row per VM, newest first. Backs the default /attestations view.
+	listLatestAttestations() {
+		return getJSON<AttestationListResponse>('/attestations/latest');
+	},
+
 	stats() {
 		return getJSON<FleetStats>('/stats');
 	},
