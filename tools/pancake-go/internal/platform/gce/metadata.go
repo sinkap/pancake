@@ -90,12 +90,7 @@ func metadataGet(path string) (string, error) {
 	return strings.TrimSpace(string(body)), nil
 }
 
-// IsGCE returns true if running on Google Compute Engine.
-func IsGCE() bool {
-	// Quick check: read DMI product name
-	if b, err := http.Get("http://" + metadataHost); err == nil {
-		b.Body.Close()
-		return true
-	}
-	return false
-}
+// Note: a top-level "are we on GCE?" predicate intentionally lives in
+// the tpmbackend package (DMI product name based, ties detection to
+// the same probe that picks the TPM backend). This file is just the
+// metadata-server client.

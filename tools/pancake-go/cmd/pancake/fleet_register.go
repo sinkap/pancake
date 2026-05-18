@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/sinkap/pancake/tools/pancake-go/internal/fleetpb"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/platform/gce"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmbackend"
 )
 
@@ -42,7 +44,42 @@ func registerWithFleet(fleetServer string, certPEMPath string, backend tpmbacken
 		platform = backend.Platform()
 	}
 
+	// On GCE, prefer the canonical instance identity (name + IP) from the
+	// metadata server over the host's view: hostname can be overridden,
+	// network interfaces can be renamed, but project/zone/instance-name
+	// are authoritative. Fail-soft: fall back to hostname + interface scan
+	// if any lookup fails, so non-GCE platforms behave unchanged.
 	internalIP := primaryInternalIP()
+	metadataJSON := ""
+	if platform == "gce" || platform == "gcp" {
+		if name, err := gce.GetInstanceName(); err == nil && name != "" {
+			hostname = name
+		}
+		if ip, err := gce.GetInternalIP(); err == nil && ip != "" {
+			internalIP = ip
+		}
+		// Stash project/zone/instance-id as JSON in the fleet record so
+		// the UI can deep-link to the GCE console and the orchestrator
+		// can identify the VM beyond just its hostname.
+		md := map[string]string{}
+		if v, err := gce.GetProjectID(); err == nil {
+			md["gce_project"] = v
+		}
+		if v, err := gce.GetZone(); err == nil {
+			md["gce_zone"] = v
+		}
+		if v, err := gce.GetInstanceID(); err == nil {
+			md["gce_instance_id"] = v
+		}
+		if v, err := gce.GetExternalIP(); err == nil && v != "" {
+			md["gce_external_ip"] = v
+		}
+		if len(md) > 0 {
+			if b, err := json.Marshal(md); err == nil {
+				metadataJSON = string(b)
+			}
+		}
+	}
 
 	certSerial, certExpires := parseCertSerialAndExpiry(certPEMPath)
 
@@ -66,6 +103,7 @@ func registerWithFleet(fleetServer string, certPEMPath string, backend tpmbacken
 		InternalIp:        internalIP,
 		CertSerial:        certSerial,
 		CurrentGeneration: 1,
+		MetadataJson:      metadataJSON,
 	}
 	if certExpires != nil {
 		req.CertExpiresAt = timestamppb.New(*certExpires)
