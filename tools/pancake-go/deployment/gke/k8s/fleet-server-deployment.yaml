@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pancake-fleet-server
+  namespace: pancake-fleet
+  labels:
+    app: pancake-fleet-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pancake-fleet-server
+  template:
+    metadata:
+      labels:
+        app: pancake-fleet-server
+    spec:
+      serviceAccountName: fleet-server-sa
+
+      containers:
+      - name: fleet-server
+        # Replace with your image. Cloud Build / artifact registry
+        # path: us-central1-docker.pkg.dev/PROJECT_ID/pancake/pancake-fleet-server:v1
+        image: REPLACE_ME_FLEET_SERVER_IMAGE
+        args:
+        - "-http-addr=$(HTTP_ADDR)"
+        - "-grpc-addr=$(GRPC_ADDR)"
+        - "-web-ui=/var/lib/pancake-fleet-ui"
+        - "-attest-interval=$(ATTEST_INTERVAL)"
+        - "-attest-concurrency=$(ATTEST_CONCURRENCY)"
+        - "-attest-vm-port=$(ATTEST_VM_PORT)"
+        - "-attest-ca-file=/var/run/secrets/pancake-mtls/ca.crt"
+        - "-attest-cert-file=/var/run/secrets/pancake-mtls/client.crt"
+        - "-attest-key-file=/var/run/secrets/pancake-mtls/client.key"
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 8081
+          name: grpc
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: cloudsql-db-credentials
+              key: connection-string
+        envFrom:
+        - configMapRef:
+            name: pancake-fleet-config
+        volumeMounts:
+        - name: pancake-mtls
+          mountPath: /var/run/secrets/pancake-mtls
+          readOnly: true
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+      # Cloud SQL Proxy sidecar uses Workload Identity (no key.json).
+      # The fleet-server connects to 127.0.0.1:5432 in the DSN above.
+      - name: cloud-sql-proxy
+        image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.13.0
+        args:
+        - "--structured-logs"
+        - "--port=5432"
+        # Replace PROJECT_ID:REGION:INSTANCE_NAME with terraform output
+        # `sql_instance_connection_name`.
+        - "REPLACE_ME_SQL_INSTANCE_CONNECTION_NAME"
+        securityContext:
+          runAsNonRoot: true
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+
+      volumes:
+      - name: pancake-mtls
+        secret:
+          secretName: pancake-mtls

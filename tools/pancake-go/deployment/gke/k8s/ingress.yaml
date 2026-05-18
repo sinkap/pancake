@@ -1,0 +1,42 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: pancake-fleet-cert
+  namespace: pancake-fleet
+spec:
+  domains:
+  - fleet.EXAMPLE.COM
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pancake-fleet
+  namespace: pancake-fleet
+  annotations:
+    # GKE-managed L7 LB + Google-managed TLS cert
+    kubernetes.io/ingress.class: "gce"
+    networking.gke.io/managed-certificates: pancake-fleet-cert
+    # Force HTTPS (HTTP redirects to HTTPS)
+    networking.gke.io/v1beta1.FrontendConfig: pancake-fleet-frontend
+spec:
+  rules:
+  - host: fleet.EXAMPLE.COM
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: pancake-fleet-server
+            port:
+              number: 80
+---
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: pancake-fleet-frontend
+  namespace: pancake-fleet
+spec:
+  redirectToHttps:
+    enabled: true
+    responseCodeName: MOVED_PERMANENTLY_DEFAULT
