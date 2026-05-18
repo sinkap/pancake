@@ -85,7 +85,7 @@ services:
       - "-listen=:7879"
       - "-cache=/var/lib/pancake-build-server"
       - "-trust-dir=/var/lib/pancake-build-server/trust"
-      - "-sign-addr=http://pancake-sign:7880"
+      - "-sign-addr=pancake-sign:7880"
     depends_on:
       - pancake-ca-server
       - pancake-sign

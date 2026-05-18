@@ -1,0 +1,56 @@
+// pancake-sign — code-signing service.
+//
+// Owns the leaf cert + private key that signs UKIs (PE-format kernel
+// images) and per-generation manifests. The build server delegates
+// signing here over gRPC so the key never enters the build process.
+//
+// Trust boundary is the compose-internal network. Production deploys
+// should front this with mTLS; see Phase 9.1.
+//
+// Endpoints:
+//   SignUKI         — unsigned PE bytes in, signed PE bytes out.
+//                     Internally shells out to sbsign(1).
+//   SignManifest    — raw manifest bytes in, RSA-PKCS1v15-SHA256
+//                     detached signature out.
+//   GetSigningCert  — returns the leaf cert PEM. Operators bake the
+//                     SubjectPublicKeyInfo into the initramfs;
+//                     enroll the cert (or its CA chain) in UEFI db.
+
+syntax = "proto3";
+
+package pancake.sign.v1;
+
+option go_package = "github.com/sinkap/pancake/common/gen/go/signpb";
+
+service PancakeSignerService {
+  // UKIs are ~20-50MB; unary is fine. Stream later if a single UKI
+  // ever crosses ~256MB. Caller must raise grpc max-recv-msg-size
+  // accordingly on both sides.
+  rpc SignUKI(SignUKIRequest) returns (SignUKIResponse);
+  rpc SignManifest(SignManifestRequest) returns (SignManifestResponse);
+  rpc GetSigningCert(GetSigningCertRequest) returns (GetSigningCertResponse);
+}
+
+message SignUKIRequest {
+  bytes unsigned_pe = 1;
+}
+
+message SignUKIResponse {
+  bytes signed_pe = 1;
+}
+
+message SignManifestRequest {
+  bytes manifest = 1;
+}
+
+message SignManifestResponse {
+  // RSA-PKCS1v15-SHA256 detached signature over `manifest`.
+  bytes signature = 1;
+}
+
+message GetSigningCertRequest {}
+
+message GetSigningCertResponse {
+  // PEM-encoded leaf X.509 certificate.
+  bytes cert_pem = 1;
+}

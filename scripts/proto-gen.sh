@@ -21,6 +21,7 @@ protoc -I common/protos \
   --go-grpc_out=. --go-grpc_opt=module=github.com/sinkap/pancake \
   common/protos/pancake.proto \
   common/protos/build.proto \
-  common/protos/fleet.proto
+  common/protos/fleet.proto \
+  common/protos/sign.proto
 
-echo "regenerated: common/gen/go/{pancakepb,buildpb,fleetpb}/"
+echo "regenerated: common/gen/go/{pancakepb,buildpb,fleetpb,signpb}/"

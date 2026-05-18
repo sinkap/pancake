@@ -1,22 +1,16 @@
-// pancake-sign — HTTP service that owns the code-signing leaf cert
+// pancake-sign — gRPC service that owns the code-signing leaf cert
 // + private key. Build server delegates UKI + manifest signing here
 // so the key never enters the build process.
 //
-// HTTP, not gRPC: surface is three endpoints with byte-in / byte-out
-// shapes, all small enough that adding a proto file would be more
-// ceremony than benefit. Trust boundary is the compose-internal
-// network; production deployments should front this with mTLS or
-// network policy.
+// gRPC, not HTTP: keeps the surface symmetric with the other Pancake
+// services (PancakeBuilderService, PancakeFleetService,
+// PancakeAgentService), and lets the build server reuse a single
+// transport / max-message setup.
 //
-// Endpoints:
-//   POST /sign/uki         body: unsigned PE bytes; returns signed PE.
-//                          Internally shells out to sbsign(1).
-//   POST /sign/manifest    body: raw bytes; returns RSA-PKCS1v15-SHA256
-//                          detached signature.
-//   GET  /signing-cert     returns leaf cert PEM. Operators bake the
-//                          SubjectPublicKeyInfo into the initramfs;
-//                          enroll the cert (or its CA chain) in UEFI db.
-//   GET  /healthz          returns 200 once cert is loaded.
+// RPCs (see common/protos/sign.proto):
+//   SignUKI         — unsigned PE bytes → signed PE bytes (sbsign(1))
+//   SignManifest    — raw manifest bytes → RSA-PKCS1v15-SHA256 sig
+//   GetSigningCert  — returns leaf cert PEM
 //
 // Auth: none in v1. Same network-trust assumption the build server
 // uses (compose-internal). Phase 5.1 adds mTLS between build and
@@ -38,15 +32,20 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
+	"net"
 	"os"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
-	signsrv "github.com/sinkap/pancake/tools/pancake-go/sign-server"
+	"google.golang.org/grpc"
+
+	"github.com/sinkap/pancake/common/gen/go/signpb"
+	signsrv "github.com/sinkap/pancake/backends/sign-server"
+	"github.com/sinkap/pancake/common/go/sign"
 )
 
+const maxSignMsgBytes = 128 * 1024 * 1024 // 128MB; matches RemoteSigner.
+
 func main() {
-	addr := flag.String("listen", ":7880", "HTTP listen address")
+	addr := flag.String("listen", ":7880", "gRPC listen address")
 	keyPath := flag.String("key", "/var/lib/pancake-sign/sign.key",
 		"PEM RSA private key path. Auto-generated as a self-signed "+
 			"dev pair (with --cert) on first start if neither file exists.")
@@ -74,11 +73,20 @@ func main() {
 
 	signer := &sign.LocalSigner{KeyPath: *keyPath, CertPath: *certPath}
 	srv := signsrv.New(signer)
-	http.Handle("/", srv)
 
-	fmt.Fprintf(os.Stderr, "[pancake-sign] listening on %s\n", *addr)
-	if err := http.ListenAndServe(*addr, nil); err != nil {
-		log.Fatalf("listen: %v", err)
+	lis, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatalf("listen %s: %v", *addr, err)
+	}
+	gs := grpc.NewServer(
+		grpc.MaxRecvMsgSize(maxSignMsgBytes),
+		grpc.MaxSendMsgSize(maxSignMsgBytes),
+	)
+	signpb.RegisterPancakeSignerServiceServer(gs, srv)
+
+	fmt.Fprintf(os.Stderr, "[pancake-sign] listening on %s (gRPC)\n", *addr)
+	if err := gs.Serve(lis); err != nil {
+		log.Fatalf("grpc serve: %v", err)
 	}
 }
 

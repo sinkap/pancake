@@ -9,9 +9,9 @@ import (
 	"net"
 	"os"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
-	"github.com/sinkap/pancake/tools/pancake-go/server"
+	"github.com/sinkap/pancake/common/gen/go/buildpb"
+	"github.com/sinkap/pancake/common/go/sign"
+	"github.com/sinkap/pancake/backends/build-server"
 	"google.golang.org/grpc"
 )
 
@@ -35,10 +35,12 @@ func main() {
 	signCert := flag.String("sign-cert", "",
 		"PEM X.509 cert paired with --sign-key. Required when --sign-key is set.")
 	signAddr := flag.String("sign-addr", "",
-		"base URL of a pancake-sign service (e.g. "+
-			"http://pancake-sign:7880). When set, UKI + manifest "+
-			"signing routes there over HTTP and the build server "+
-			"holds no private key. Mutually exclusive with --sign-key.")
+		"gRPC target of a pancake-sign service (e.g. "+
+			"pancake-sign:7880). Legacy 'http://host:port' URLs are "+
+			"accepted and the scheme is stripped. When set, UKI + "+
+			"manifest signing routes there over gRPC and the build "+
+			"server holds no private key. Mutually exclusive with "+
+			"--sign-key.")
 	flag.Parse()
 
 	if err := os.MkdirAll(*cacheDir, 0o755); err != nil {
@@ -57,7 +59,7 @@ func main() {
 		fmt.Fprintf(os.Stderr,
 			"[pancake-build-server] signer: local PEM (%s)\n", *signKey)
 	case *signAddr != "":
-		signer = &sign.RemoteSigner{BaseURL: *signAddr}
+		signer = &sign.RemoteSigner{Target: *signAddr}
 		fmt.Fprintf(os.Stderr,
 			"[pancake-build-server] signer: remote (%s)\n", *signAddr)
 	}
@@ -77,7 +79,7 @@ func main() {
 		log.Fatalf("listen %s: %v", *addr, err)
 	}
 	g := grpc.NewServer()
-	buildpb.RegisterPancakeBuilderServer(g, srv)
+	buildpb.RegisterPancakeBuilderServiceServer(g, srv)
 
 	fmt.Fprintf(os.Stderr,
 		"[pancake-build-server] listening on %s, cache=%s\n", *addr, *cacheDir)
