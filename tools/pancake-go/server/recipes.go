@@ -633,6 +633,21 @@ func (s *Server) bakeOrchConfig(
 	}
 	attestURL := strings.TrimSpace(in.Params["attest-ca-url"])
 	fleetURL := strings.TrimSpace(in.Params["fleet-server"])
+	ekTrust := strings.TrimSpace(in.Params["ek-trust"])
+	issuanceCA := strings.TrimSpace(in.Params["issuance-ca"])
+	casPool := strings.TrimSpace(in.Params["cas-pool"])
+
+	// Default ek-trust to dev-ek-ca (current behavior) when unset, so
+	// existing recipes that don't specify it still bake the dev EK CA.
+	if ekTrust == "" {
+		ekTrust = "dev-ek-ca"
+	}
+	if issuanceCA == "" {
+		issuanceCA = "step-ca"
+	}
+	if issuanceCA == "gcp-cas" && casPool == "" {
+		return nil, fmt.Errorf("orch-config: issuance-ca=gcp-cas requires cas-pool")
+	}
 
 	if s.trustDir == "" {
 		return nil, fmt.Errorf("orch-config: server has no --trust-dir " +
@@ -657,27 +672,86 @@ func (s *Server) bakeOrchConfig(
 		return nil, err
 	}
 
-	// Unified CA mode: include dev EK CA for local AK cert issuance
-	// This allows VMs to sign their own AK certs without calling attest-ca.
-	// Note: dev EK CA private key is included (for dev only - production
-	// should use hardware TPMs with manufacturer-signed EKs/AKs).
-	devEKCADir := filepath.Join(s.trustDir, "dev-ek-ca")
-	if _, err := os.Stat(filepath.Join(devEKCADir, "ca.crt")); err == nil {
-		ekCADir := filepath.Join(orchDir, "dev-ek-ca")
-		if err := os.MkdirAll(ekCADir, 0o755); err != nil {
-			return nil, err
-		}
-		// Copy dev EK CA cert and key
-		for _, f := range []string{"ca.crt", "ca.key"} {
-			src := filepath.Join(devEKCADir, f)
-			dst := filepath.Join(ekCADir, f)
-			data, err := os.ReadFile(src)
-			if err == nil {
-				os.WriteFile(dst, data, 0o644)
+	// EK trust anchor baking. The three modes pick different files:
+	switch ekTrust {
+	case "dev-ek-ca":
+		// Bake the dev EK CA (cert + KEY) so the VM's pancake enroll
+		// can mint AK certs locally. Dev-only.
+		devEKCADir := filepath.Join(s.trustDir, "dev-ek-ca")
+		if _, err := os.Stat(filepath.Join(devEKCADir, "ca.crt")); err == nil {
+			ekCADir := filepath.Join(orchDir, "dev-ek-ca")
+			if err := os.MkdirAll(ekCADir, 0o755); err != nil {
+				return nil, err
 			}
+			for _, f := range []string{"ca.crt", "ca.key"} {
+				src := filepath.Join(devEKCADir, f)
+				dst := filepath.Join(ekCADir, f)
+				if data, err := os.ReadFile(src); err == nil {
+					_ = os.WriteFile(dst, data, 0o644)
+				}
+			}
+			fmt.Fprintf(os.Stderr,
+				"[build-server] baked dev EK CA into orch-config layer\n")
+		} else {
+			return nil, fmt.Errorf("orch-config: ek-trust=dev-ek-ca but no "+
+				"dev-ek-ca/ca.crt in trust dir %s (run init-dev-ek-ca.sh)",
+				s.trustDir)
 		}
-		fmt.Fprintf(os.Stderr,
-			"[build-server] baked dev EK CA into orch-config layer\n")
+	case "manufacturer":
+		// Bake a manufacturer-roots bundle (Intel/Infineon/AMD/etc.).
+		// Operator pre-populates the build-server's trust dir.
+		src := filepath.Join(s.trustDir, "manufacturer-roots.pem")
+		if data, err := os.ReadFile(src); err == nil {
+			if err := os.WriteFile(filepath.Join(orchDir, "ek-trust-roots.pem"),
+				data, 0o644); err != nil {
+				return nil, err
+			}
+			fmt.Fprintf(os.Stderr,
+				"[build-server] baked manufacturer EK roots into orch-config\n")
+		} else {
+			return nil, fmt.Errorf("orch-config: ek-trust=manufacturer but %s "+
+				"is missing or unreadable", src)
+		}
+	case "google-vtpm":
+		// Bake Google's vTPM root CA bundle. Operator places it in the
+		// build-server trust dir (one-time, see docs/GCP-DEPLOY.md).
+		src := filepath.Join(s.trustDir, "google-vtpm-roots.pem")
+		if data, err := os.ReadFile(src); err == nil {
+			if err := os.WriteFile(filepath.Join(orchDir, "ek-trust-roots.pem"),
+				data, 0o644); err != nil {
+				return nil, err
+			}
+			fmt.Fprintf(os.Stderr,
+				"[build-server] baked Google vTPM roots into orch-config\n")
+		} else {
+			return nil, fmt.Errorf("orch-config: ek-trust=google-vtpm but %s "+
+				"is missing or unreadable (fetch Google vTPM roots once and "+
+				"place there)", src)
+		}
+	default:
+		return nil, fmt.Errorf("orch-config: unknown ek-trust %q", ekTrust)
+	}
+
+	// Issuance CA-specific files
+	if issuanceCA == "gcp-cas" {
+		// Bake the CAS pool root cert so pancaked's mTLS server config
+		// trusts CAS-issued client certs. Operator places the pool root
+		// (or full chain) at <trustDir>/cas-pool-root.pem. Terraform
+		// can produce this automatically; see docs/GCP-DEPLOY.md.
+		src := filepath.Join(s.trustDir, "cas-pool-root.pem")
+		if data, err := os.ReadFile(src); err == nil {
+			if err := os.WriteFile(filepath.Join(orchDir, "cas-pool-root.pem"),
+				data, 0o644); err != nil {
+				return nil, err
+			}
+			fmt.Fprintf(os.Stderr,
+				"[build-server] baked CAS pool root into orch-config\n")
+		} else {
+			return nil, fmt.Errorf("orch-config: issuance-ca=gcp-cas but %s "+
+				"is missing (fetch via gcloud privateca pools "+
+				"get-ca-certs %s --location=... > %s)",
+				src, casPool, src)
+		}
 	}
 
 	cfg := struct {
@@ -687,11 +761,17 @@ func (s *Server) bakeOrchConfig(
 		AttestCARoot string `json:"attest_ca_root,omitempty"`
 		ClientCARoot string `json:"client_ca_root"`
 		FleetServer  string `json:"fleet_server,omitempty"`
+		EKTrust      string `json:"ek_trust,omitempty"`
+		IssuanceCA   string `json:"issuance_ca,omitempty"`
+		CASPool      string `json:"cas_pool,omitempty"`
 	}{
 		CAURL:        caURL,
 		TrustRoot:    "/etc/pancake/orch/trust-root.crt",
 		ClientCARoot: "/etc/pancake/orch/trust-root.crt",
 		FleetServer:  fleetURL,
+		EKTrust:      ekTrust,
+		IssuanceCA:   issuanceCA,
+		CASPool:      casPool,
 	}
 
 	// Legacy dual-CA mode: if attest-ca-url is set, include it

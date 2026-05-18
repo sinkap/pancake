@@ -175,10 +175,48 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			fleetServer = env
 		}
 
+		// Smart defaults for ek-trust + issuance.ca based on platform.
+		// Recipe can override; env vars override recipe.
+		ekTrust := r.Attestation.EKTrust
+		issuanceCA := r.Issuance.CA
+		switch r.Platform {
+		case "gcp", "gce":
+			if ekTrust == "" {
+				ekTrust = "google-vtpm"
+			}
+			if issuanceCA == "" {
+				issuanceCA = "gcp-cas"
+			}
+		case "self-hosted":
+			if ekTrust == "" {
+				ekTrust = "manufacturer"
+			}
+			if issuanceCA == "" {
+				issuanceCA = "step-ca"
+			}
+		default: // dev or empty
+			if ekTrust == "" {
+				ekTrust = "dev-ek-ca"
+			}
+			if issuanceCA == "" {
+				issuanceCA = "step-ca"
+			}
+		}
+
+		// Step-ca URL precedence: Issuance.StepCA.URL > Orchestrator.CAURL > hoststate
+		stepCAURL := r.Issuance.StepCA.URL
+		if stepCAURL == "" {
+			stepCAURL = caURL
+		}
+		casPool := r.Issuance.CAS.Pool
+
 		orch = OrchArgs{
-			CAURL:       caURL,
+			CAURL:       stepCAURL,
 			AttestCAURL: attestCAURL,
 			FleetServer: fleetServer,
+			EKTrust:     ekTrust,
+			IssuanceCA:  issuanceCA,
+			CASPool:     casPool,
 		}
 
 		// Capture skip-modules flag from recipe
@@ -428,6 +466,15 @@ type OrchArgs struct {
 	// FleetServer is the gRPC address VMs auto-register with after enroll.
 	// Empty = no auto-enrollment.
 	FleetServer string
+
+	// EKTrust selects the EK trust anchor baked into orch-config.
+	// One of: "dev-ek-ca" (default), "manufacturer", "google-vtpm".
+	EKTrust string
+	// IssuanceCA selects the cert issuer the VM uses.
+	// One of: "step-ca" (default), "gcp-cas".
+	IssuanceCA string
+	// CASPool is the Google CAS pool resource name when IssuanceCA=="gcp-cas".
+	CASPool string
 }
 
 // hasURLs reports whether orchestrator URLs were provided.

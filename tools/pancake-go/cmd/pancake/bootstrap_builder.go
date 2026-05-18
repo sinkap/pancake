@@ -239,6 +239,18 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 		if a.Orch.FleetServer != "" {
 			params["fleet-server"] = a.Orch.FleetServer
 		}
+		// EK trust anchor selection (one of dev-ek-ca/manufacturer/google-vtpm)
+		if a.Orch.EKTrust != "" {
+			params["ek-trust"] = a.Orch.EKTrust
+		}
+		// Cert issuer selection (one of step-ca/gcp-cas)
+		if a.Orch.IssuanceCA != "" {
+			params["issuance-ca"] = a.Orch.IssuanceCA
+		}
+		// CAS pool resource name (required when issuance-ca=gcp-cas)
+		if a.Orch.CASPool != "" {
+			params["cas-pool"] = a.Orch.CASPool
+		}
 		packages = append(packages, &buildpb.Package{
 			Manager: &buildpb.Package_Internal{
 				Internal: &buildpb.PancakeInternal{

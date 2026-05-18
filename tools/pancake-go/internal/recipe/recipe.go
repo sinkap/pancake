@@ -79,6 +79,7 @@ type Recipe struct {
 	Outputs      Outputs      `yaml:"outputs"`
 	Orchestrator Orchestrator `yaml:"orchestrator"`
 	Attestation  Attestation  `yaml:"attestation"`
+	Issuance     Issuance     `yaml:"issuance"`
 	GCE          GCE          `yaml:"gce"`
 }
 
@@ -86,11 +87,56 @@ type Recipe struct {
 // Independent of Platform - you can run on GCE with custom attestation
 // (portable), or use gce-shielded (GCE-only, simpler).
 type Attestation struct {
-	// Mode selects the attestation backend:
+	// Mode selects the attestation backend (legacy, not yet consumed):
 	// - "custom" (default): pancake's TPM attestation, works on any platform
 	// - "gce-shielded": GCE Shielded VM API, only on GCE
 	// - "auto": try gce-shielded if available, fallback to custom
 	Mode string `yaml:"mode"`
+
+	// EKTrust picks where the EK certificate's trust anchor comes from:
+	//   "dev-ek-ca"   - locally generated self-signed CA, baked into the
+	//                   image. Used for swtpm dev where no real EK cert
+	//                   exists. Default for platform=self-hosted/dev.
+	//   "manufacturer" - real TPM manufacturer roots (Intel/Infineon/AMD
+	//                   bundle). Default for platform=self-hosted with
+	//                   hardware TPM.
+	//   "google-vtpm" - Google's vTPM root CA chain. Default for
+	//                   platform=gcp; pancake enroll reads the
+	//                   Google-signed EK cert from NV instead of using
+	//                   the dev EK CA.
+	EKTrust string `yaml:"ek-trust"`
+}
+
+// Issuance configures which CA signs the VM's mTLS server cert.
+// Independent of Platform — you can run on GCE with step-ca (portable)
+// or use Google CAS (GCE-native, simpler).
+type Issuance struct {
+	// CA picks the issuer:
+	//   "step-ca" (default for dev/self-hosted) — ACME-tpm against a
+	//             customer-managed step-ca.
+	//   "gcp-cas" (default for platform=gcp) — Google Cloud Certificate
+	//             Authority Service; auth via GCE instance identity (ADC).
+	CA string `yaml:"ca"`
+
+	// StepCA configures the step-ca path (used when CA == "step-ca").
+	// Optional — Orchestrator.CAURL is used as a fallback for URL.
+	StepCA StepCAIssuance `yaml:"step-ca"`
+
+	// CAS configures the Google CAS path (used when CA == "gcp-cas").
+	CAS CASIssuance `yaml:"cas"`
+}
+
+type StepCAIssuance struct {
+	// URL is the ACME directory URL of the step-ca. When empty,
+	// falls back to Orchestrator.CAURL for backward compatibility.
+	URL string `yaml:"url"`
+}
+
+type CASIssuance struct {
+	// Pool is the full CAS pool resource name:
+	//   projects/<project>/locations/<region>/caPools/<pool>
+	// Required when Issuance.CA == "gcp-cas".
+	Pool string `yaml:"pool"`
 }
 
 // Orchestrator declares the single endpoint of the orchestrator

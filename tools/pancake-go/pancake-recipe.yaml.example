@@ -41,8 +41,9 @@ outputs:
   efi:       ./pancake-efi.img
 
 orchestrator:
-  # Unified CA mode: only ca-url is required
-  # For QEMU usernet, 10.0.2.2 is the host
+  # Unified CA mode: only ca-url is required.
+  # For QEMU usernet, 10.0.2.2 is the host.
+  # Used as the default for issuance.step-ca.url when that's unset.
   ca-url: https://10.0.2.2:8443/acme/tpm/directory
 
   # Optional: pancake-fleet-server gRPC address. When set, `pancake
@@ -50,14 +51,26 @@ orchestrator:
   # flow succeeds, so it shows up in the dashboard automatically.
   # fleet-server: 10.0.2.2:8081
 
-# Attestation mode (orthogonal to platform):
-# - custom (default): pancake's TPM attestation, works on any platform
-# - gce-shielded: GCE Shielded VM API (only on GCE, simpler)
-# - auto: try gce-shielded if available, fallback to custom
+# Attestation: where the EK certificate's trust anchor comes from.
+# Defaults from platform:
+#   platform: dev          → ek-trust: dev-ek-ca   (swtpm has no real EK)
+#   platform: self-hosted  → ek-trust: manufacturer (TPM vendor roots)
+#   platform: gcp          → ek-trust: google-vtpm (Google-signed EK)
 # attestation:
-#   mode: custom
+#   ek-trust: dev-ek-ca
 
-# When platform: gce, bootstrap auto-uploads pancake-efi.img to GCS using
+# Issuance: which CA signs the VM's mTLS server cert.
+# Defaults from platform:
+#   platform: dev / self-hosted → issuance.ca: step-ca
+#   platform: gcp               → issuance.ca: gcp-cas
+# issuance:
+#   ca: step-ca          # or: gcp-cas
+#   step-ca:
+#     url: https://...   # falls back to orchestrator.ca-url when unset
+#   cas:
+#     pool: projects/<proj>/locations/<region>/caPools/<pool>
+
+# When platform: gcp, bootstrap auto-uploads pancake-efi.img to GCS using
 # Application Default Credentials (gcloud auth application-default login,
 # or $GOOGLE_APPLICATION_CREDENTIALS pointing at a service-account key).
 # gce:
