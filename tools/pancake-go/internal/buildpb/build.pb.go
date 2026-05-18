@@ -141,6 +141,11 @@ const (
 	BuildImageChunk_ARTIFACT_EFI_DISK    BuildImageChunk_Artifact = 5 // GPT + ESP + rootfs (sparse-aware)
 	BuildImageChunk_ARTIFACT_MANIFEST    BuildImageChunk_Artifact = 6 // signed generation manifest
 	BuildImageChunk_ARTIFACT_PUBKEY      BuildImageChunk_Artifact = 7 // signing cert pubkey (PEM)
+	// Server's report of a successful GCS upload (when the request
+	// set gcs_upload). Sent INSTEAD OF ARTIFACT_EFI_DISK; data is a
+	// single JSON blob: {"gcs_uri":"gs://...","image_name":"...",
+	// "size_bytes":N}. Always last=true; single chunk.
+	BuildImageChunk_ARTIFACT_GCS_INFO BuildImageChunk_Artifact = 8
 )
 
 // Enum value maps for BuildImageChunk_Artifact.
@@ -154,6 +159,7 @@ var (
 		5: "ARTIFACT_EFI_DISK",
 		6: "ARTIFACT_MANIFEST",
 		7: "ARTIFACT_PUBKEY",
+		8: "ARTIFACT_GCS_INFO",
 	}
 	BuildImageChunk_Artifact_value = map[string]int32{
 		"ARTIFACT_UNSPECIFIED": 0,
@@ -164,6 +170,7 @@ var (
 		"ARTIFACT_EFI_DISK":    5,
 		"ARTIFACT_MANIFEST":    6,
 		"ARTIFACT_PUBKEY":      7,
+		"ARTIFACT_GCS_INFO":    8,
 	}
 )
 
@@ -191,7 +198,7 @@ func (x BuildImageChunk_Artifact) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use BuildImageChunk_Artifact.Descriptor instead.
 func (BuildImageChunk_Artifact) EnumDescriptor() ([]byte, []int) {
-	return file_build_proto_rawDescGZIP(), []int{15, 0}
+	return file_build_proto_rawDescGZIP(), []int{16, 0}
 }
 
 type Package struct {
@@ -1272,9 +1279,16 @@ type BuildImageRequest struct {
 	// Forwarded to pancake-sign when present.
 	SigningKeyId string `protobuf:"bytes,11,opt,name=signing_key_id,json=signingKeyId,proto3" json:"signing_key_id,omitempty"`
 	// Generation lineage. Same semantics as BuildGenerationRequest.
-	Parent        int32  `protobuf:"varint,12,opt,name=parent,proto3" json:"parent,omitempty"`
-	Counter       int32  `protobuf:"varint,13,opt,name=counter,proto3" json:"counter,omitempty"`
-	Description   string `protobuf:"bytes,14,opt,name=description,proto3" json:"description,omitempty"`
+	Parent      int32  `protobuf:"varint,12,opt,name=parent,proto3" json:"parent,omitempty"`
+	Counter     int32  `protobuf:"varint,13,opt,name=counter,proto3" json:"counter,omitempty"`
+	Description string `protobuf:"bytes,14,opt,name=description,proto3" json:"description,omitempty"`
+	// When set, the server uploads the EFI disk to GCS directly (using
+	// its own ADC) instead of streaming the bytes back. Saves the WAN
+	// round-trip for operators running pancake bootstrap against a
+	// remote build server. ARTIFACT_EFI_DISK chunks are SKIPPED; a
+	// single ARTIFACT_GCS_INFO chunk carries the resulting GCS URI.
+	// Ignored when want_efi_disk is false.
+	GcsUpload     *GCSUpload `protobuf:"bytes,15,opt,name=gcs_upload,json=gcsUpload,proto3" json:"gcs_upload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1407,6 +1421,108 @@ func (x *BuildImageRequest) GetDescription() string {
 	return ""
 }
 
+func (x *BuildImageRequest) GetGcsUpload() *GCSUpload {
+	if x != nil {
+		return x.GcsUpload
+	}
+	return nil
+}
+
+// GCSUpload tells the server "upload the EFI image yourself instead
+// of streaming it to me, then tell me where it landed".
+type GCSUpload struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Target bucket. May be bare ("pancake-images") or gs://-prefixed.
+	Bucket string `protobuf:"bytes,1,opt,name=bucket,proto3" json:"bucket,omitempty"`
+	// Object name within the bucket. Server uses this verbatim; client
+	// picks a unique value (typically pancake-os-<timestamp>.tar.gz).
+	ObjectName string `protobuf:"bytes,2,opt,name=object_name,json=objectName,proto3" json:"object_name,omitempty"`
+	// When true, server also calls compute.images.insert after upload.
+	CreateImage bool `protobuf:"varint,3,opt,name=create_image,json=createImage,proto3" json:"create_image,omitempty"`
+	// GCE image name when create_image=true. Empty = derive from
+	// object_name (strip ".tar.gz" suffix, lowercase, dots → dashes).
+	ImageName string `protobuf:"bytes,4,opt,name=image_name,json=imageName,proto3" json:"image_name,omitempty"`
+	// Optional GCE image family for rolling updates.
+	ImageFamily string `protobuf:"bytes,5,opt,name=image_family,json=imageFamily,proto3" json:"image_family,omitempty"`
+	// GCP project ID for compute.images.insert. Required when
+	// create_image=true.
+	Project       string `protobuf:"bytes,6,opt,name=project,proto3" json:"project,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GCSUpload) Reset() {
+	*x = GCSUpload{}
+	mi := &file_build_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GCSUpload) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GCSUpload) ProtoMessage() {}
+
+func (x *GCSUpload) ProtoReflect() protoreflect.Message {
+	mi := &file_build_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GCSUpload.ProtoReflect.Descriptor instead.
+func (*GCSUpload) Descriptor() ([]byte, []int) {
+	return file_build_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GCSUpload) GetBucket() string {
+	if x != nil {
+		return x.Bucket
+	}
+	return ""
+}
+
+func (x *GCSUpload) GetObjectName() string {
+	if x != nil {
+		return x.ObjectName
+	}
+	return ""
+}
+
+func (x *GCSUpload) GetCreateImage() bool {
+	if x != nil {
+		return x.CreateImage
+	}
+	return false
+}
+
+func (x *GCSUpload) GetImageName() string {
+	if x != nil {
+		return x.ImageName
+	}
+	return ""
+}
+
+func (x *GCSUpload) GetImageFamily() string {
+	if x != nil {
+		return x.ImageFamily
+	}
+	return ""
+}
+
+func (x *GCSUpload) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
 type BuildImageChunk struct {
 	state    protoimpl.MessageState   `protogen:"open.v1"`
 	Artifact BuildImageChunk_Artifact `protobuf:"varint,1,opt,name=artifact,proto3,enum=pancake.build.v1.BuildImageChunk_Artifact" json:"artifact,omitempty"`
@@ -1420,7 +1536,7 @@ type BuildImageChunk struct {
 
 func (x *BuildImageChunk) Reset() {
 	*x = BuildImageChunk{}
-	mi := &file_build_proto_msgTypes[15]
+	mi := &file_build_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1432,7 +1548,7 @@ func (x *BuildImageChunk) String() string {
 func (*BuildImageChunk) ProtoMessage() {}
 
 func (x *BuildImageChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_build_proto_msgTypes[15]
+	mi := &file_build_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1445,7 +1561,7 @@ func (x *BuildImageChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildImageChunk.ProtoReflect.Descriptor instead.
 func (*BuildImageChunk) Descriptor() ([]byte, []int) {
-	return file_build_proto_rawDescGZIP(), []int{15}
+	return file_build_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *BuildImageChunk) GetArtifact() BuildImageChunk_Artifact {
@@ -1485,7 +1601,7 @@ type Catalog struct {
 
 func (x *Catalog) Reset() {
 	*x = Catalog{}
-	mi := &file_build_proto_msgTypes[16]
+	mi := &file_build_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1497,7 +1613,7 @@ func (x *Catalog) String() string {
 func (*Catalog) ProtoMessage() {}
 
 func (x *Catalog) ProtoReflect() protoreflect.Message {
-	mi := &file_build_proto_msgTypes[16]
+	mi := &file_build_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1510,7 +1626,7 @@ func (x *Catalog) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Catalog.ProtoReflect.Descriptor instead.
 func (*Catalog) Descriptor() ([]byte, []int) {
-	return file_build_proto_rawDescGZIP(), []int{16}
+	return file_build_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Catalog) GetRecipe() []*Recipe {
@@ -1541,7 +1657,7 @@ type Recipe struct {
 
 func (x *Recipe) Reset() {
 	*x = Recipe{}
-	mi := &file_build_proto_msgTypes[17]
+	mi := &file_build_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1553,7 +1669,7 @@ func (x *Recipe) String() string {
 func (*Recipe) ProtoMessage() {}
 
 func (x *Recipe) ProtoReflect() protoreflect.Message {
-	mi := &file_build_proto_msgTypes[17]
+	mi := &file_build_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1566,7 +1682,7 @@ func (x *Recipe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Recipe.ProtoReflect.Descriptor instead.
 func (*Recipe) Descriptor() ([]byte, []int) {
-	return file_build_proto_rawDescGZIP(), []int{17}
+	return file_build_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Recipe) GetName() string {
@@ -1691,7 +1807,7 @@ const file_build_proto_rawDesc = "" +
 	"\x04last\x18\x02 \x01(\bR\x04last\";\n" +
 	"\rBlobReference\x12\x16\n" +
 	"\x06sha256\x18\x01 \x01(\tR\x06sha256\x12\x12\n" +
-	"\x04size\x18\x02 \x01(\x03R\x04size\"\xf8\x03\n" +
+	"\x04size\x18\x02 \x01(\x03R\x04size\"\xb4\x04\n" +
 	"\x11BuildImageRequest\x125\n" +
 	"\bpackages\x18\x01 \x03(\v2\x19.pancake.build.v1.PackageR\bpackages\x12\x18\n" +
 	"\acmdline\x18\x02 \x01(\tR\acmdline\x12!\n" +
@@ -1708,12 +1824,23 @@ const file_build_proto_rawDesc = "" +
 	"\x0esigning_key_id\x18\v \x01(\tR\fsigningKeyId\x12\x16\n" +
 	"\x06parent\x18\f \x01(\x05R\x06parent\x12\x18\n" +
 	"\acounter\x18\r \x01(\x05R\acounter\x12 \n" +
-	"\vdescription\x18\x0e \x01(\tR\vdescription\"\xdc\x02\n" +
+	"\vdescription\x18\x0e \x01(\tR\vdescription\x12:\n" +
+	"\n" +
+	"gcs_upload\x18\x0f \x01(\v2\x1b.pancake.build.v1.GCSUploadR\tgcsUpload\"\xc3\x01\n" +
+	"\tGCSUpload\x12\x16\n" +
+	"\x06bucket\x18\x01 \x01(\tR\x06bucket\x12\x1f\n" +
+	"\vobject_name\x18\x02 \x01(\tR\n" +
+	"objectName\x12!\n" +
+	"\fcreate_image\x18\x03 \x01(\bR\vcreateImage\x12\x1d\n" +
+	"\n" +
+	"image_name\x18\x04 \x01(\tR\timageName\x12!\n" +
+	"\fimage_family\x18\x05 \x01(\tR\vimageFamily\x12\x18\n" +
+	"\aproject\x18\x06 \x01(\tR\aproject\"\xf3\x02\n" +
 	"\x0fBuildImageChunk\x12F\n" +
 	"\bartifact\x18\x01 \x01(\x0e2*.pancake.build.v1.BuildImageChunk.ArtifactR\bartifact\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x16\n" +
 	"\x06offset\x18\x03 \x01(\x03R\x06offset\x12\x12\n" +
-	"\x04last\x18\x04 \x01(\bR\x04last\"\xc0\x01\n" +
+	"\x04last\x18\x04 \x01(\bR\x04last\"\xd7\x01\n" +
 	"\bArtifact\x12\x18\n" +
 	"\x14ARTIFACT_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ARTIFACT_DISK_IMAGE\x10\x01\x12\x16\n" +
@@ -1722,7 +1849,8 @@ const file_build_proto_rawDesc = "" +
 	"\fARTIFACT_UKI\x10\x04\x12\x15\n" +
 	"\x11ARTIFACT_EFI_DISK\x10\x05\x12\x15\n" +
 	"\x11ARTIFACT_MANIFEST\x10\x06\x12\x13\n" +
-	"\x0fARTIFACT_PUBKEY\x10\a\";\n" +
+	"\x0fARTIFACT_PUBKEY\x10\a\x12\x15\n" +
+	"\x11ARTIFACT_GCS_INFO\x10\b\";\n" +
 	"\aCatalog\x120\n" +
 	"\x06recipe\x18\x01 \x03(\v2\x18.pancake.build.v1.RecipeR\x06recipe\"\xe4\x01\n" +
 	"\x06Recipe\x12\x12\n" +
@@ -1764,7 +1892,7 @@ func file_build_proto_rawDescGZIP() []byte {
 }
 
 var file_build_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_build_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_build_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_build_proto_goTypes = []any{
 	(LayerPart)(0),                 // 0: pancake.build.v1.LayerPart
 	(BuildImageChunk_Artifact)(0),  // 1: pancake.build.v1.BuildImageChunk.Artifact
@@ -1783,20 +1911,21 @@ var file_build_proto_goTypes = []any{
 	(*BlobChunk)(nil),              // 14: pancake.build.v1.BlobChunk
 	(*BlobReference)(nil),          // 15: pancake.build.v1.BlobReference
 	(*BuildImageRequest)(nil),      // 16: pancake.build.v1.BuildImageRequest
-	(*BuildImageChunk)(nil),        // 17: pancake.build.v1.BuildImageChunk
-	(*Catalog)(nil),                // 18: pancake.build.v1.Catalog
-	(*Recipe)(nil),                 // 19: pancake.build.v1.Recipe
-	nil,                            // 20: pancake.build.v1.PancakeInternal.BlobsEntry
-	nil,                            // 21: pancake.build.v1.PancakeInternal.ParamsEntry
-	(*timestamppb.Timestamp)(nil),  // 22: google.protobuf.Timestamp
+	(*GCSUpload)(nil),              // 17: pancake.build.v1.GCSUpload
+	(*BuildImageChunk)(nil),        // 18: pancake.build.v1.BuildImageChunk
+	(*Catalog)(nil),                // 19: pancake.build.v1.Catalog
+	(*Recipe)(nil),                 // 20: pancake.build.v1.Recipe
+	nil,                            // 21: pancake.build.v1.PancakeInternal.BlobsEntry
+	nil,                            // 22: pancake.build.v1.PancakeInternal.ParamsEntry
+	(*timestamppb.Timestamp)(nil),  // 23: google.protobuf.Timestamp
 }
 var file_build_proto_depIdxs = []int32{
 	3,  // 0: pancake.build.v1.Package.apt:type_name -> pancake.build.v1.APT
 	4,  // 1: pancake.build.v1.Package.internal:type_name -> pancake.build.v1.PancakeInternal
 	3,  // 2: pancake.build.v1.PancakeInternal.packages:type_name -> pancake.build.v1.APT
-	20, // 3: pancake.build.v1.PancakeInternal.blobs:type_name -> pancake.build.v1.PancakeInternal.BlobsEntry
-	21, // 4: pancake.build.v1.PancakeInternal.params:type_name -> pancake.build.v1.PancakeInternal.ParamsEntry
-	22, // 5: pancake.build.v1.LayerHandle.built_at:type_name -> google.protobuf.Timestamp
+	21, // 3: pancake.build.v1.PancakeInternal.blobs:type_name -> pancake.build.v1.PancakeInternal.BlobsEntry
+	22, // 4: pancake.build.v1.PancakeInternal.params:type_name -> pancake.build.v1.PancakeInternal.ParamsEntry
+	23, // 5: pancake.build.v1.LayerHandle.built_at:type_name -> google.protobuf.Timestamp
 	2,  // 6: pancake.build.v1.BuildLayerRequest.package:type_name -> pancake.build.v1.Package
 	2,  // 7: pancake.build.v1.LookupLayerRequest.package:type_name -> pancake.build.v1.Package
 	2,  // 8: pancake.build.v1.BuildGenerationRequest.packages:type_name -> pancake.build.v1.Package
@@ -1805,27 +1934,28 @@ var file_build_proto_depIdxs = []int32{
 	0,  // 11: pancake.build.v1.LayerChunk.part:type_name -> pancake.build.v1.LayerPart
 	5,  // 12: pancake.build.v1.ListLayersResponse.layer:type_name -> pancake.build.v1.LayerHandle
 	2,  // 13: pancake.build.v1.BuildImageRequest.packages:type_name -> pancake.build.v1.Package
-	1,  // 14: pancake.build.v1.BuildImageChunk.artifact:type_name -> pancake.build.v1.BuildImageChunk.Artifact
-	19, // 15: pancake.build.v1.Catalog.recipe:type_name -> pancake.build.v1.Recipe
-	6,  // 16: pancake.build.v1.PancakeBuilder.BuildLayer:input_type -> pancake.build.v1.BuildLayerRequest
-	7,  // 17: pancake.build.v1.PancakeBuilder.LookupLayer:input_type -> pancake.build.v1.LookupLayerRequest
-	8,  // 18: pancake.build.v1.PancakeBuilder.BuildGeneration:input_type -> pancake.build.v1.BuildGenerationRequest
-	10, // 19: pancake.build.v1.PancakeBuilder.GetLayer:input_type -> pancake.build.v1.GetLayerRequest
-	14, // 20: pancake.build.v1.PancakeBuilder.UploadBlob:input_type -> pancake.build.v1.BlobChunk
-	12, // 21: pancake.build.v1.PancakeBuilder.ListLayers:input_type -> pancake.build.v1.ListLayersRequest
-	16, // 22: pancake.build.v1.PancakeBuilder.BuildImage:input_type -> pancake.build.v1.BuildImageRequest
-	5,  // 23: pancake.build.v1.PancakeBuilder.BuildLayer:output_type -> pancake.build.v1.LayerHandle
-	5,  // 24: pancake.build.v1.PancakeBuilder.LookupLayer:output_type -> pancake.build.v1.LayerHandle
-	9,  // 25: pancake.build.v1.PancakeBuilder.BuildGeneration:output_type -> pancake.build.v1.GenerationManifest
-	11, // 26: pancake.build.v1.PancakeBuilder.GetLayer:output_type -> pancake.build.v1.LayerChunk
-	15, // 27: pancake.build.v1.PancakeBuilder.UploadBlob:output_type -> pancake.build.v1.BlobReference
-	13, // 28: pancake.build.v1.PancakeBuilder.ListLayers:output_type -> pancake.build.v1.ListLayersResponse
-	17, // 29: pancake.build.v1.PancakeBuilder.BuildImage:output_type -> pancake.build.v1.BuildImageChunk
-	23, // [23:30] is the sub-list for method output_type
-	16, // [16:23] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	17, // 14: pancake.build.v1.BuildImageRequest.gcs_upload:type_name -> pancake.build.v1.GCSUpload
+	1,  // 15: pancake.build.v1.BuildImageChunk.artifact:type_name -> pancake.build.v1.BuildImageChunk.Artifact
+	20, // 16: pancake.build.v1.Catalog.recipe:type_name -> pancake.build.v1.Recipe
+	6,  // 17: pancake.build.v1.PancakeBuilder.BuildLayer:input_type -> pancake.build.v1.BuildLayerRequest
+	7,  // 18: pancake.build.v1.PancakeBuilder.LookupLayer:input_type -> pancake.build.v1.LookupLayerRequest
+	8,  // 19: pancake.build.v1.PancakeBuilder.BuildGeneration:input_type -> pancake.build.v1.BuildGenerationRequest
+	10, // 20: pancake.build.v1.PancakeBuilder.GetLayer:input_type -> pancake.build.v1.GetLayerRequest
+	14, // 21: pancake.build.v1.PancakeBuilder.UploadBlob:input_type -> pancake.build.v1.BlobChunk
+	12, // 22: pancake.build.v1.PancakeBuilder.ListLayers:input_type -> pancake.build.v1.ListLayersRequest
+	16, // 23: pancake.build.v1.PancakeBuilder.BuildImage:input_type -> pancake.build.v1.BuildImageRequest
+	5,  // 24: pancake.build.v1.PancakeBuilder.BuildLayer:output_type -> pancake.build.v1.LayerHandle
+	5,  // 25: pancake.build.v1.PancakeBuilder.LookupLayer:output_type -> pancake.build.v1.LayerHandle
+	9,  // 26: pancake.build.v1.PancakeBuilder.BuildGeneration:output_type -> pancake.build.v1.GenerationManifest
+	11, // 27: pancake.build.v1.PancakeBuilder.GetLayer:output_type -> pancake.build.v1.LayerChunk
+	15, // 28: pancake.build.v1.PancakeBuilder.UploadBlob:output_type -> pancake.build.v1.BlobReference
+	13, // 29: pancake.build.v1.PancakeBuilder.ListLayers:output_type -> pancake.build.v1.ListLayersResponse
+	18, // 30: pancake.build.v1.PancakeBuilder.BuildImage:output_type -> pancake.build.v1.BuildImageChunk
+	24, // [24:31] is the sub-list for method output_type
+	17, // [17:24] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_build_proto_init() }
@@ -1843,7 +1973,7 @@ func file_build_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_build_proto_rawDesc), len(file_build_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   20,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

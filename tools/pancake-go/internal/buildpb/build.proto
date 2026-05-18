@@ -394,6 +394,34 @@ message BuildImageRequest {
   int32  parent      = 12;
   int32  counter     = 13;
   string description = 14;
+
+  // When set, the server uploads the EFI disk to GCS directly (using
+  // its own ADC) instead of streaming the bytes back. Saves the WAN
+  // round-trip for operators running pancake bootstrap against a
+  // remote build server. ARTIFACT_EFI_DISK chunks are SKIPPED; a
+  // single ARTIFACT_GCS_INFO chunk carries the resulting GCS URI.
+  // Ignored when want_efi_disk is false.
+  GCSUpload gcs_upload = 15;
+}
+
+// GCSUpload tells the server "upload the EFI image yourself instead
+// of streaming it to me, then tell me where it landed".
+message GCSUpload {
+  // Target bucket. May be bare ("pancake-images") or gs://-prefixed.
+  string bucket = 1;
+  // Object name within the bucket. Server uses this verbatim; client
+  // picks a unique value (typically pancake-os-<timestamp>.tar.gz).
+  string object_name = 2;
+  // When true, server also calls compute.images.insert after upload.
+  bool create_image = 3;
+  // GCE image name when create_image=true. Empty = derive from
+  // object_name (strip ".tar.gz" suffix, lowercase, dots → dashes).
+  string image_name = 4;
+  // Optional GCE image family for rolling updates.
+  string image_family = 5;
+  // GCP project ID for compute.images.insert. Required when
+  // create_image=true.
+  string project = 6;
 }
 
 message BuildImageChunk {
@@ -406,6 +434,11 @@ message BuildImageChunk {
     ARTIFACT_EFI_DISK    = 5;  // GPT + ESP + rootfs (sparse-aware)
     ARTIFACT_MANIFEST    = 6;  // signed generation manifest
     ARTIFACT_PUBKEY      = 7;  // signing cert pubkey (PEM)
+    // Server's report of a successful GCS upload (when the request
+    // set gcs_upload). Sent INSTEAD OF ARTIFACT_EFI_DISK; data is a
+    // single JSON blob: {"gcs_uri":"gs://...","image_name":"...",
+    // "size_bytes":N}. Always last=true; single chunk.
+    ARTIFACT_GCS_INFO    = 8;
   }
   Artifact artifact = 1;
   bytes    data     = 2;

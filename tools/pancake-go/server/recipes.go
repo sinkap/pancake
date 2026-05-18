@@ -653,10 +653,24 @@ func (s *Server) bakeOrchConfig(
 		return nil, fmt.Errorf("orch-config: server has no --trust-dir " +
 			"configured; cannot locate the TLS trust roots")
 	}
-	caRootPath := filepath.Join(s.trustDir, "trust-root.crt")
-	caRoot, err := os.ReadFile(caRootPath)
+
+	// trust-root.crt is pancaked's mTLS client-cert trust pool. Source
+	// depends on issuance mode:
+	//   step-ca → step-ca's trust-root.crt (intermediate + root bundle)
+	//   gcp-cas → the CAS pool's root (same bytes used as cas-pool-root.pem)
+	// pancaked always reads /etc/pancake/orch/trust-root.crt regardless,
+	// so the destination path is fixed.
+	var trustRootSrc string
+	switch issuanceCA {
+	case "gcp-cas":
+		trustRootSrc = filepath.Join(s.trustDir, "cas-pool-root.pem")
+	default: // step-ca and legacy paths
+		trustRootSrc = filepath.Join(s.trustDir, "trust-root.crt")
+	}
+	caRoot, err := os.ReadFile(trustRootSrc)
 	if err != nil {
-		return nil, fmt.Errorf("orch-config: read %s: %w", caRootPath, err)
+		return nil, fmt.Errorf("orch-config: read %s (for issuance-ca=%s): %w",
+			trustRootSrc, issuanceCA, err)
 	}
 
 	staging, err := os.MkdirTemp(workRoot, "stage-orch-")
