@@ -78,7 +78,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         dosfstools \
         mtools \
         systemd-boot-efi \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# ca-certificates is needed because the server makes HTTPS calls to
+# Google APIs (storage.googleapis.com for the GCS upload, privateca for
+# pool root fetches) once platform=gcp recipes run. Without it the Go
+# default TLS dialer dies with "x509: certificate signed by unknown
+# authority". The Ubuntu base image deliberately ships without a CA
+# bundle to keep the layer thin; any image that makes external HTTPS
+# calls must pull this in explicitly.
 
 COPY --from=builder /out/pancake-build-server /usr/local/bin/pancake-build-server
 
