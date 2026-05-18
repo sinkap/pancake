@@ -13,6 +13,7 @@ import (
 	"net"
 
 	"github.com/sinkap/pancake/tools/pancake-go/internal/issuance"
+	"github.com/sinkap/pancake/tools/pancake-go/internal/issuance/gcpcas"
 )
 
 // pickIssuer returns the Issuer the enroll command should use based on
@@ -33,8 +34,11 @@ func pickIssuer(cfg *orchConfig, caURL, caRoot, attestCAURL, attestCARoot, acctK
 			acctKeyFile:  acctKeyFile,
 		}, nil
 	case "gcp-cas":
-		return nil, fmt.Errorf("issuance.ca=gcp-cas selected but the gcp-cas " +
-			"issuer is not yet compiled in (follow-up commit adds it)")
+		if cfg == nil || cfg.CASPool == "" {
+			return nil, fmt.Errorf("issuance.ca=gcp-cas selected but cas_pool is empty " +
+				"in /etc/pancake/orch/config.json (recipe needs issuance.cas.pool)")
+		}
+		return gcpcas.New(cfg.CASPool)
 	default:
 		return nil, fmt.Errorf("unknown issuance.ca: %q (want step-ca or gcp-cas)", mode)
 	}

@@ -3,13 +3,17 @@ module github.com/sinkap/pancake/tools/pancake-go
 go 1.25.1
 
 require (
+	cloud.google.com/go/compute v1.63.0
+	cloud.google.com/go/security v1.24.0
+	cloud.google.com/go/storage v1.62.1
 	github.com/fxamacker/cbor/v2 v2.9.2
+	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/go-attestation v0.5.1
 	github.com/google/go-sev-guest v0.14.1
 	github.com/google/go-tpm v0.9.8
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/smallstep/certificates v0.30.2
-	github.com/spf13/cobra v1.10.2
 	go.step.sm/crypto v0.80.0
 	google.golang.org/grpc v1.81.0
 	google.golang.org/protobuf v1.36.11
@@ -21,11 +25,10 @@ require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.20.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
-	cloud.google.com/go/compute v1.63.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/iam v1.7.0 // indirect
+	cloud.google.com/go/longrunning v0.9.0 // indirect
 	cloud.google.com/go/monitoring v1.24.3 // indirect
-	cloud.google.com/go/storage v1.62.1 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	filippo.io/bigmod v0.1.0 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
@@ -59,7 +62,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
-	github.com/golang-migrate/migrate/v4 v4.19.1 // indirect
 	github.com/golang/glog v1.2.5 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
@@ -74,10 +76,8 @@ require (
 	github.com/googleapis/enterprise-certificate-proxy v0.3.15 // indirect
 	github.com/googleapis/gax-go/v2 v2.22.0 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
-	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.9.2 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/lib/pq v1.10.9 // indirect
@@ -110,7 +110,6 @@ require (
 	github.com/smallstep/pkcs7 v0.2.1 // indirect
 	github.com/smallstep/scep v0.0.0-20250318231241-a25cabb69492 // indirect
 	github.com/spf13/cast v1.7.0 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
 	github.com/urfave/cli v1.22.17 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
