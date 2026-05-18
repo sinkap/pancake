@@ -63,6 +63,27 @@ type AssembleImageRequest struct {
 	Parent      int32
 	Counter     int32
 	Description string
+
+	// GCSUpload, when non-nil, redirects the EFI disk artifact: instead
+	// of buffering it into result.EFIDisk for streaming back to the
+	// caller, the server uploads it directly to GCS using its own ADC
+	// (the build-server's GSA needs roles/storage.objectAdmin; the GCP
+	// terraform sets this up). Result.GCSInfoJSON is populated; the
+	// stream handler then sends a single ARTIFACT_GCS_INFO chunk
+	// instead of the EFI byte stream. WantEFIDisk should be false in
+	// this mode (server ignores it).
+	GCSUpload *GCSUploadOpts
+}
+
+// GCSUploadOpts mirrors buildpb.GCSUpload, kept as a Go-native struct
+// so AssembleImage stays callable from non-gRPC integration tests.
+type GCSUploadOpts struct {
+	Bucket      string
+	ObjectName  string
+	CreateImage bool
+	ImageName   string
+	ImageFamily string
+	Project     string
 }
 
 // AssembleImageResult bundles every artifact produced by a single
@@ -79,6 +100,13 @@ type AssembleImageResult struct {
 	ManifestSig []byte
 	Lowers      []byte
 	PubkeyPEM   []byte
+
+	// GCSInfoJSON, when non-empty, signals "EFI disk uploaded to GCS;
+	// here's the metadata". Set only when req.GCSUpload was non-nil
+	// and the upload succeeded. The stream handler sends this verbatim
+	// as the data of a single ARTIFACT_GCS_INFO chunk and skips
+	// streaming EFIDisk (which will be nil in this case).
+	GCSInfoJSON []byte
 }
 
 // AssembleImage runs the BuildImage pipeline. Caller-side work is
@@ -225,8 +253,11 @@ func (s *Server) AssembleImage(
 		}
 	}
 
-	// 7. EFI disk (GPT + ESP + rootfs).
-	if req.WantEFIDisk {
+	// 7. EFI disk (GPT + ESP + rootfs). Two modes:
+	//   - default: read bytes into out.EFIDisk for the streamer to ship
+	//   - GCSUpload: pack on disk, push to GCS, leave out.EFIDisk nil,
+	//     populate out.GCSInfoJSON for the streamer to send instead.
+	if req.WantEFIDisk || req.GCSUpload != nil {
 		efiPath := filepath.Join(work, "pancake-efi.img")
 		if err := efi.PackEFIDisk(efi.EFIDiskOpts{
 			Out:    efiPath,
@@ -236,9 +267,17 @@ func (s *Server) AssembleImage(
 		}); err != nil {
 			return nil, fmt.Errorf("efi.PackEFIDisk: %w", err)
 		}
-		out.EFIDisk, err = os.ReadFile(efiPath)
-		if err != nil {
-			return nil, err
+		if req.GCSUpload != nil {
+			info, err := s.uploadEFIToGCS(ctx, efiPath, req.GCSUpload)
+			if err != nil {
+				return nil, fmt.Errorf("uploadEFIToGCS: %w", err)
+			}
+			out.GCSInfoJSON = info
+		} else {
+			out.EFIDisk, err = os.ReadFile(efiPath)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 

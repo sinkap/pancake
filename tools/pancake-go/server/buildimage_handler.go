@@ -21,6 +21,19 @@ func (s *Server) BuildImage(
 	req *buildpb.BuildImageRequest,
 	stream buildpb.PancakeBuilder_BuildImageServer,
 ) error {
+	// Translate the optional GCSUpload field.
+	var gcs *GCSUploadOpts
+	if g := req.GetGcsUpload(); g != nil {
+		gcs = &GCSUploadOpts{
+			Bucket:      g.GetBucket(),
+			ObjectName:  g.GetObjectName(),
+			CreateImage: g.GetCreateImage(),
+			ImageName:   g.GetImageName(),
+			ImageFamily: g.GetImageFamily(),
+			Project:     g.GetProject(),
+		}
+	}
+
 	res, err := s.AssembleImage(stream.Context(), &AssembleImageRequest{
 		Packages:      req.GetPackages(),
 		Cmdline:       req.GetCmdline(),
@@ -36,6 +49,7 @@ func (s *Server) BuildImage(
 		Parent:        req.GetParent(),
 		Counter:       req.GetCounter(),
 		Description:   req.GetDescription(),
+		GCSUpload:     gcs,
 	})
 	if err != nil {
 		return err
@@ -75,6 +89,16 @@ func (s *Server) BuildImage(
 	if len(res.Lowers) > 0 {
 		if err := streamArtifact(stream,
 			buildpb.BuildImageChunk_ARTIFACT_MANIFEST, res.Lowers); err != nil {
+			return err
+		}
+	}
+
+	// When GCSUpload was requested, the EFI disk doesn't get streamed
+	// above (res.EFIDisk is nil); instead we emit a single GCS_INFO
+	// chunk carrying the JSON metadata for the client to parse + print.
+	if len(res.GCSInfoJSON) > 0 {
+		if err := streamArtifact(stream,
+			buildpb.BuildImageChunk_ARTIFACT_GCS_INFO, res.GCSInfoJSON); err != nil {
 			return err
 		}
 	}
