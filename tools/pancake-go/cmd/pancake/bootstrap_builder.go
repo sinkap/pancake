@@ -22,6 +22,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -291,6 +292,28 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 		Counter:       1,
 		Description:   "initial generation (thin-client)",
 	}
+
+	// platform=gcp: route the EFI disk to GCS server-side rather than
+	// pulling the bytes over the WAN. Skip want_efi_disk so the server
+	// doesn't queue chunks; server's GCS_INFO chunk replaces them.
+	// Local-dev mode (platform empty/dev) keeps streaming, unchanged.
+	gcpUploadActive := false
+	if (a.Platform == "gcp" || a.Platform == "gce") && a.GCE.Bucket != "" {
+		obj := fmt.Sprintf("pancake-os-%s.tar.gz",
+			time.Now().UTC().Format("20060102T150405Z"))
+		req.GcsUpload = &buildpb.GCSUpload{
+			Bucket:      a.GCE.Bucket,
+			ObjectName:  obj,
+			CreateImage: a.GCE.CreateImage,
+			ImageFamily: a.GCE.ImageFamily,
+			Project:     a.GCE.Project,
+		}
+		req.WantEfiDisk = false
+		gcpUploadActive = true
+		fmt.Fprintf(os.Stderr,
+			"[bootstrap] gcs_upload: server will push EFI directly to %s/%s\n",
+			a.GCE.Bucket, obj)
+	}
 	stream, err := cli.BuildImage(ctx, req)
 	if err != nil {
 		return fmt.Errorf("BuildImage: %w", err)
@@ -312,6 +335,7 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 
 	// MANIFEST emits three streams: body, sig, lowers.
 	var manifestBody, manifestSig, lowers, pubkeyPEM []byte
+	var gcsInfoJSON []byte
 	manifestPhase := 0
 
 	for {
@@ -323,6 +347,11 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 			return fmt.Errorf("BuildImage stream: %w", err)
 		}
 		switch c.Artifact {
+		case buildpb.BuildImageChunk_ARTIFACT_GCS_INFO:
+			// Server uploaded the EFI image to GCS; a single chunk
+			// carries the metadata. last=true is expected but the
+			// append-and-keep-going pattern below is robust to either.
+			gcsInfoJSON = append(gcsInfoJSON, c.Data...)
 		case buildpb.BuildImageChunk_ARTIFACT_MANIFEST:
 			switch manifestPhase {
 			case 0:
@@ -400,7 +429,33 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 		"[bootstrap] done — kit + artifacts under %s\n", a.Output)
 
 	// Platform-specific post-processing.
-	if a.Platform == "gce" {
+	switch {
+	case gcpUploadActive:
+		// Server already did the upload + (optionally) image create.
+		// Parse the metadata blob and print the operator-visible URI.
+		var info struct {
+			GCSURI    string `json:"gcs_uri"`
+			ImageName string `json:"image_name"`
+			SizeBytes int64  `json:"size_bytes"`
+		}
+		if len(gcsInfoJSON) == 0 {
+			return fmt.Errorf("gcs_upload requested but server emitted no GCS_INFO chunk")
+		}
+		if err := json.Unmarshal(gcsInfoJSON, &info); err != nil {
+			return fmt.Errorf("parse GCS_INFO: %w (raw=%q)", err, gcsInfoJSON)
+		}
+		fmt.Fprintf(os.Stderr,
+			"[bootstrap] image uploaded server-side: %s (%d MB)\n",
+			info.GCSURI, info.SizeBytes>>20)
+		if info.ImageName != "" {
+			fmt.Fprintf(os.Stderr,
+				"[bootstrap] GCE image created: %s\n", info.ImageName)
+		}
+	case a.Platform == "gce":
+		// Legacy fallback: bucket wasn't set, do the client-side upload
+		// path the way we used to. Only triggers when the operator
+		// somehow set Platform=gce without a bucket; the gcpUploadActive
+		// branch above is the normal case.
 		if err := uploadToGCE(ctx, a); err != nil {
 			return fmt.Errorf("gce upload: %w", err)
 		}
