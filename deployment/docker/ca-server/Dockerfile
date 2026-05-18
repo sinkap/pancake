@@ -2,8 +2,8 @@
 # Adds a startup script that bootstraps a CA on first run and exposes
 # an ACME provisioner with `device-attest-01` for TPM 2.0.
 #
-# Build (context = tools/pancake-go/ca-server/):
-#   docker build -f ca-server/Dockerfile -t pancake-ca-server tools/pancake-go/ca-server/
+# Build (context = deployment/docker/ca-server/):
+#   docker build -t pancake-ca-server deployment/docker/ca-server/
 #
 # Run with named volume (cert state survives container rm):
 #   docker volume create pancake-ca-state

@@ -4,8 +4,8 @@
 #   pancake-fleet-db      PostgreSQL 16             :5433 (host)
 #   pancake-fleet-server  HTTP REST + gRPC API      :8080 (HTTP), :8081 (gRPC)
 #
-# Usage from this directory:
-#   docker compose -f fleet-compose.yaml up -d --build
+# Usage from the repo root:
+#   docker compose -f deployment/docker/fleet-compose.yaml up -d --build
 #
 # Schema is auto-migrated on first server start.
 # State persists in the pancake-fleet-db-data volume.
@@ -31,7 +31,7 @@ services:
   pancake-fleet-server:
     build:
       context: ../..
-      dockerfile: tools/pancake-go/fleet-server/Dockerfile
+      dockerfile: deployment/docker/fleet-server/Dockerfile
     image: pancake-fleet-server:local
     container_name: pancake-fleet-server
     # Run as the operator UID so we can read pancake-host-state/client.key
@@ -55,7 +55,7 @@ services:
     volumes:
       # Bind-mount operator mTLS materials so the poller can talk to
       # pancaked. Pass --attest-{ca,cert,key}-file in command below.
-      - ./pancake-host-state:/var/lib/pancake-host-state:ro
+      - ../../pancake-host-state:/var/lib/pancake-host-state:ro
     command:
       - "-http-addr=:8080"
       - "-grpc-addr=:8081"

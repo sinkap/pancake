@@ -33,7 +33,7 @@ gRPC API for the fleet and an HTTP REST API + web UI for operators.
 ## Local stack
 
 ```bash
-cd tools/pancake-go
+cd .   # repo root
 docker compose -f fleet-compose.yaml up -d --build
 # → Postgres on :5433
 # → pancake-fleet-server on :8080 (HTTP + UI) and :8081 (gRPC)

@@ -1,6 +1,4 @@
-# gcloud / Cloud Build upload exclusions.
-# Keep the source tree the three Dockerfiles need; drop image artifacts,
-# chroot staging, VM state, the linux-bpf-for-next worktree, etc.
+# Docker build-context exclusions. Mirrors .gcloudignore.
 
 # Big build artifacts at repo root
 pancake-state.img
@@ -31,13 +29,6 @@ deployment/terraform/.terraform/
 deployment/terraform/terraform.tfstate*
 deployment/terraform/*.tfplan
 
-# Local generated keys
-*.tpm
-*.key
-*.tpmstate
-
-# Git pack files are big
+# Git pack files
 .git/
 .github/
-
-# Everything else: keep

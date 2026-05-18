@@ -170,7 +170,7 @@ terraform -chdir=terraform apply -var project_id=YOUR_PROJECT
 # Build + push the fleet-server image (UI bundled in)
 gcloud builds submit ../.. --tag \
   us-central1-docker.pkg.dev/YOUR_PROJECT/pancake/pancake-fleet-server:v1 \
-  --file=tools/pancake-go/fleet-server/Dockerfile
+  --file=deployment/docker/fleet-server/Dockerfile
 
 # Apply k8s manifests (after substituting REPLACE_ME placeholders)
 kubectl apply -f k8s/

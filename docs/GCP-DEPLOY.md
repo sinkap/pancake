@@ -22,7 +22,7 @@ gcloud auth login
 gcloud auth application-default login
 gcloud config set project YOUR_PROJECT
 
-cd tools/pancake-go/deployment/gke/terraform
+cd deployment/terraform
 terraform init
 terraform apply \
   -var project_id=YOUR_PROJECT \
@@ -58,23 +58,23 @@ fleet_server_gsa_email   = pancake-fleet-server@YOUR_PROJECT.iam.gserviceaccount
 gcloud artifacts repositories create pancake --repository-format=docker \
   --location=us-central1
 
-# fleet-server (UI bundled)
-gcloud builds submit ../../.. --tag \
-  us-central1-docker.pkg.dev/YOUR_PROJECT/pancake/pancake-fleet-server:v1 \
-  --config <(cat <<'EOF'
-steps:
-- name: gcr.io/cloud-builders/docker
-  args: ["build", "-f", "tools/pancake-go/fleet-server/Dockerfile",
-         "-t", "us-central1-docker.pkg.dev/YOUR_PROJECT/pancake/pancake-fleet-server:v1",
-         "."]
-images:
-- us-central1-docker.pkg.dev/YOUR_PROJECT/pancake/pancake-fleet-server:v1
-EOF
-)
+# From the repo root. fleet-server (UI bundled):
+cd ../..
+gcloud builds submit . \
+  --tag us-central1-docker.pkg.dev/YOUR_PROJECT/pancake/pancake-fleet-server:v1 \
+  -f deployment/docker/fleet-server/Dockerfile
 
-# build-server, sign-server: same recipe, swap Dockerfile path. Once
-# pushed, restart the build VM so the startup script picks up the new
-# images:
+# build-server, sign-server: same recipe, swap Dockerfile path:
+gcloud builds submit . \
+  --tag us-central1-docker.pkg.dev/YOUR_PROJECT/pancake/pancake-build-server:v1 \
+  -f deployment/docker/build-server/Dockerfile
+
+gcloud builds submit . \
+  --tag us-central1-docker.pkg.dev/YOUR_PROJECT/pancake/pancake-sign:v1 \
+  -f deployment/docker/sign-server/Dockerfile
+
+# Once pushed, restart the build VM so the startup script picks up the
+# new images:
 gcloud compute instances reset pancake-build-server --zone=us-central1-a
 ```
 

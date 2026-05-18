@@ -2,17 +2,15 @@
 # cache lives at /var/lib/pancake-build-server — mount a host volume
 # (or named volume) there to keep artifacts across container restarts.
 #
-# Build (context = REPO ROOT, not tools/pancake-go/):
-#   docker build -f tools/pancake-go/server/Dockerfile -t pancake-build-server .
+# Build (context = REPO ROOT):
+#   docker build -f deployment/docker/build-server/Dockerfile \
+#                -t pancake-build-server .
 #
-# This wider context lets the image bake in the canonical pancake +
-# pancaked + mount-overlay + pivot-root binaries (under
+# The wider repo-root context lets the image bake in the canonical
+# pancake + pancaked + mount-overlay + pivot-root binaries (under
 # /usr/local/share/pancake-bundled/) so recipes that don't get
 # operator-uploaded override blobs can fall back to known-good
 # versions shipped with the build server image.
-#
-# The compose.yaml in tools/pancake-go/ uses the right context;
-# manual `docker build` invocations need to be from the repo root.
 #
 # Run with named volume:
 #   docker volume create pancake-build-cache
@@ -31,20 +29,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /src/tools/pancake-go
-COPY tools/pancake-go/go.mod tools/pancake-go/go.sum ./
-RUN go mod download
-COPY tools/pancake-go ./
-RUN CGO_ENABLED=0 go build -ldflags='-s -w' -o /out/pancake-build-server ./server/cmd
-RUN CGO_ENABLED=0 go build -ldflags='-s -w' -o /out/pancake          ./cmd/pancake
-RUN CGO_ENABLED=0 go build -ldflags='-s -w' -o /out/pancaked         ./daemon/pancaked
-
-# C helpers — sourced from the wider repo context.
 WORKDIR /src
-COPY initramfs/mount-overlay.c ./mount-overlay.c
-COPY pivot-root.c ./pivot-root.c
-RUN gcc -O2 -Wall -Wextra -static -o /out/mount-overlay ./mount-overlay.c
-RUN gcc -O2 -Wall -Wextra -static -o /out/pivot-root    ./pivot-root.c
+COPY go.mod go.sum ./
+RUN go mod download
+COPY backends   ./backends
+COPY cli        ./cli
+COPY common     ./common
+COPY tools      ./tools
+RUN CGO_ENABLED=0 go build -ldflags='-s -w' -o /out/pancake-build-server ./backends/build-server/cmd
+RUN CGO_ENABLED=0 go build -ldflags='-s -w' -o /out/pancake              ./cli/pancake
+RUN CGO_ENABLED=0 go build -ldflags='-s -w' -o /out/pancaked             ./backends/pancaked/cmd
+
+# C helpers (live under tools/{initramfs,pivot-root}/).
+RUN gcc -O2 -Wall -Wextra -static -o /out/mount-overlay tools/initramfs/mount-overlay.c
+RUN gcc -O2 -Wall -Wextra -static -o /out/pivot-root    tools/pivot-root/pivot-root.c
 
 # ----- stage 2: runtime --------------------------------------------
 FROM ubuntu:24.04
@@ -53,10 +51,11 @@ ARG DEBIAN_FRONTEND=noninteractive
 # System tools the build path shells out to. Kept minimal — anything
 # not in this list will fail loudly at first BuildGeneration call.
 #   mmdebstrap        — sandbox bootstrapper (the heavy lift)
-#   e2fsprogs         — mkfs.ext4 (per-layer image format)
+#   e2fsprogs         — mkfs.ext4 (STATE partition)
+#   squashfs-tools    — mksquashfs for the per-layer verity images
 #   cryptsetup-bin    — veritysetup (per-layer dm-verity hash tree)
 #   dpkg              — dpkg-query (already in ubuntu base, listed for clarity)
-#   sudo              — runner.Sudo wrappers in internal/runner
+#   sudo              — runner.Sudo wrappers in common/go/runner
 #   openssh-client    — ssh-keygen for fresh host-key fallback in pancake-host recipe
 #   tar               — modules tarball extraction in pancake-modules recipe
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -103,7 +102,7 @@ COPY --from=builder /out/pivot-root       /usr/local/share/pancake-bundled/pivot
 # initramfs entrypoint script (sh + openssl + tpm2-tools). Server
 # stages this into every initramfs it builds via build_image.go;
 # operators can't override this v1.
-COPY initramfs/init                       /usr/local/share/pancake-bundled/init
+COPY tools/initramfs/init                 /usr/local/share/pancake-bundled/init
 
 # Cache lives here; mount a host volume to persist.
 RUN mkdir -p /var/lib/pancake-build-server

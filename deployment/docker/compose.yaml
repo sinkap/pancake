@@ -11,7 +11,7 @@
 # written by pancake-ca-server's init.sh, consumed RO by pancake-build-server
 # when baking the orch-config layer.
 #
-# Run from this directory:
+# Run from the repo root (a top-level compose.yaml shims this in):
 #
 #   docker compose up -d --build
 #
@@ -31,7 +31,7 @@ services:
 
   pancake-ca-server:
     build:
-      context: ./ca-server
+      context: ./ca-server   # relative to this compose file → deployment/docker/ca-server/
     image: pancake-ca-server:local
     container_name: pancake-ca-server
     depends_on:
@@ -52,22 +52,23 @@ services:
       - pancake-trust:/pancake-trust
       # Bind-mount for operator-visible host state: JWK password,
       # trust roots, ca-url. Replaces docker exec/cp round-trips.
-      - ./pancake-host-state:/var/lib/pancake-host-state
+      - ../../pancake-host-state:/var/lib/pancake-host-state
 
   pancake-build-server:
     build:
-      # Wider context: server/Dockerfile bakes in the canonical
-      # pancake / pancaked / mount-overlay / pivot-root binaries
-      # (sourced from initramfs/ and the repo root) as
-      # bundled-binary fallbacks for recipes that don't get an
-      # operator-uploaded override blob.
+      # Context is the repo root so the Dockerfile can COPY the
+      # canonical pancake / pancaked / mount-overlay / pivot-root
+      # sources (under cli/, backends/, tools/) plus the shared
+      # common/ libs as bundled-binary fallbacks for recipes that
+      # don't get an operator-uploaded override blob.
       context: ../..
-      dockerfile: tools/pancake-go/server/Dockerfile
+      dockerfile: deployment/docker/build-server/Dockerfile
     image: pancake-build-server:local
     container_name: pancake-build-server
     # mmdebstrap (chroot + bind mounts) and veritysetup (device
     # mapper) need CAP_SYS_ADMIN. --privileged is the easy button;
-    # see server/Dockerfile for a tighter capability set.
+    # see deployment/docker/build-server/Dockerfile for a tighter
+    # capability set.
     privileged: true
     ports:
       - "7879:7879"
@@ -93,7 +94,7 @@ services:
   pancake-sign:
     build:
       context: ../..
-      dockerfile: tools/pancake-go/sign-server/Dockerfile
+      dockerfile: deployment/docker/sign-server/Dockerfile
     image: pancake-sign:local
     container_name: pancake-sign
     ports:
