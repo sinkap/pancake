@@ -34,23 +34,38 @@ services:
       dockerfile: tools/pancake-go/fleet-server/Dockerfile
     image: pancake-fleet-server:local
     container_name: pancake-fleet-server
+    # Run as the operator UID so we can read pancake-host-state/client.key
+    # (mode 0600 on the host). Default to UID 1000 — override with
+    # `UID=$(id -u) docker compose -f fleet-compose.yaml up` if different.
+    user: "${UID:-1000}:${GID:-1000}"
     depends_on:
       pancake-fleet-db:
         condition: service_healthy
     ports:
       - "8080:8080"        # HTTP REST + UI
       - "8081:8081"        # gRPC FleetManager
+    # Make the QEMU host's loopback reachable as host.docker.internal so
+    # the poller can attest VMs that QEMU port-forwards to the host (the
+    # local-dev case). Enroll such VMs with internal_ip=host.docker.internal
+    # instead of 127.0.0.1.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       DATABASE_URL: postgres://pancake:pancake-dev@pancake-fleet-db:5432/pancake_fleet?sslmode=disable
+    volumes:
+      # Bind-mount operator mTLS materials so the poller can talk to
+      # pancaked. Pass --attest-{ca,cert,key}-file in command below.
+      - ./pancake-host-state:/var/lib/pancake-host-state:ro
     command:
       - "-http-addr=:8080"
       - "-grpc-addr=:8081"
       - "-web-ui=/var/lib/pancake-fleet-ui"
-      # Attestation poller defaults to enabled. Mount mTLS materials
-      # under /etc/pancake-fleet/ and pass --attest-{ca,cert,key}-file
-      # to talk to pancaked instances. In dev you can either leave it
-      # insecure (omit all three flags) or bind-mount the existing
-      # pancake-host-state/ directory and reference the files here.
+      - "-attest-ca-file=/var/lib/pancake-host-state/step-root.crt"
+      - "-attest-cert-file=/var/lib/pancake-host-state/client.crt"
+      - "-attest-key-file=/var/lib/pancake-host-state/client.key"
+      - "-attest-server-name=pancake-demo"
+      - "-attest-interval=30s"
+      - "-attest-tofu"
 
 volumes:
   pancake-fleet-db-data:

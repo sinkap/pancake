@@ -32,7 +32,7 @@ func (db *DB) UpsertVM(ctx context.Context, vm VM) (int32, error) {
 INSERT INTO vms (
     name, platform, internal_ip, external_ip,
     cert_serial, cert_expires_at, current_generation, metadata, updated_at
-) VALUES ($1, $2, NULLIF($3, '')::inet, NULLIF($4, '')::inet,
+) VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''),
           NULLIF($5, ''), $6, $7, $8::jsonb, NOW())
 ON CONFLICT (name) DO UPDATE SET
     platform           = EXCLUDED.platform,
@@ -87,8 +87,8 @@ SELECT count(*) FROM vms
 
 	const q = `
 SELECT id, name, platform,
-       COALESCE(host(internal_ip), '') AS internal_ip,
-       COALESCE(host(external_ip), '') AS external_ip,
+       COALESCE(internal_ip, '') AS internal_ip,
+       COALESCE(external_ip, '') AS external_ip,
        enrolled_at, COALESCE(cert_serial, '') AS cert_serial,
        cert_expires_at, last_heartbeat, last_attestation,
        attestation_status, COALESCE(current_generation, 0) AS current_generation,
@@ -133,8 +133,8 @@ func (db *DB) GetVMByID(ctx context.Context, id int32) (*VM, error) {
 func (db *DB) getVMWhere(ctx context.Context, where string, arg any) (*VM, error) {
 	q := `
 SELECT id, name, platform,
-       COALESCE(host(internal_ip), '') AS internal_ip,
-       COALESCE(host(external_ip), '') AS external_ip,
+       COALESCE(internal_ip, '') AS internal_ip,
+       COALESCE(external_ip, '') AS external_ip,
        enrolled_at, COALESCE(cert_serial, '') AS cert_serial,
        cert_expires_at, last_heartbeat, last_attestation,
        attestation_status, COALESCE(current_generation, 0) AS current_generation,
