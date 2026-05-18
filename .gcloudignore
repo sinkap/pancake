@@ -2,21 +2,23 @@
 # Keep the source tree the three Dockerfiles need; drop image artifacts,
 # chroot staging, VM state, the linux-bpf-for-next worktree, etc.
 
-# Big build artifacts at repo root
-pancake-state.img
-pancake-state.img.fresh
-pancake-efi.img
-pancake-initramfs.cpio.gz
-pancake-bzImage
-pancake
-pancaked
-pancake-build-server
+# Big build artifacts at repo root (leading / anchors to root —
+# unanchored 'pancake' would also exclude cli/pancake/ and
+# backends/pancaked/, breaking the Docker build).
+/pancake-state.img
+/pancake-state.img.fresh
+/pancake-efi.img
+/pancake-initramfs.cpio.gz
+/pancake-bzImage
+/pancake
+/pancaked
+/pancake-build-server
 
-# Operator runtime dirs
-bin/
-pancake-host-state/
-pancake-kit/
-vm-state/
+# Operator runtime dirs (root-anchored)
+/bin/
+/pancake-host-state/
+/pancake-kit/
+/vm-state/
 
 # VM image staging (huge, root-owned, regenerable)
 vm/

@@ -1,20 +1,20 @@
 # Docker build-context exclusions. Mirrors .gcloudignore.
 
-# Big build artifacts at repo root
-pancake-state.img
-pancake-state.img.fresh
-pancake-efi.img
-pancake-initramfs.cpio.gz
-pancake-bzImage
-pancake
-pancaked
-pancake-build-server
+# Big build artifacts at repo root (leading / anchors to root)
+/pancake-state.img
+/pancake-state.img.fresh
+/pancake-efi.img
+/pancake-initramfs.cpio.gz
+/pancake-bzImage
+/pancake
+/pancaked
+/pancake-build-server
 
-# Operator runtime dirs
-bin/
-pancake-host-state/
-pancake-kit/
-vm-state/
+# Operator runtime dirs (root-anchored)
+/bin/
+/pancake-host-state/
+/pancake-kit/
+/vm-state/
 
 # VM image staging (huge, root-owned, regenerable)
 vm/
