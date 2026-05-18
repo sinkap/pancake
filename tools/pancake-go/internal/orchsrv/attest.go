@@ -3,6 +3,7 @@ package orchsrv
 import (
 	"context"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -222,7 +223,7 @@ func (s *server) Attest(
 		eventLog = b
 	}
 
-	return &orchpb.AttestResponse{
+	resp := &orchpb.AttestResponse{
 		Quote:     quote,
 		Signature: sig,
 		AkPub:     s.attest.akPub,
@@ -231,7 +232,63 @@ func (s *server) Attest(
 		Pcr:       pcrDigests,
 		EventLog:  eventLog,
 		PcrsBin:   pcrsBin,
-	}, nil
+	}
+
+	// EK cert chain — included when present on disk. `pancake enroll`
+	// writes /etc/pancake/ek.crt (DER) + /etc/pancake/ek-chain.pem
+	// (PEM, leaf first then intermediates) on real TPMs that have a
+	// manufacturer cert in NV. Best-effort: any read error is logged
+	// and the response goes out without these fields.
+	if ekCertDER, chainDERs, err := loadEKChainFiles(
+		"/etc/pancake/ek.crt", "/etc/pancake/ek-chain.pem"); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"[pancaked] WARN: EK cert load failed: %v\n", err)
+	} else {
+		resp.EkCert = ekCertDER
+		resp.EkCertChain = chainDERs
+	}
+
+	return resp, nil
+}
+
+// loadEKChainFiles reads the EK cert (DER) and chain (PEM, leaf-first)
+// the VM's `pancake enroll` wrote at first boot. Returns nil/nil when
+// the files don't exist (swtpm case) so the AttestResponse just omits
+// the optional fields.
+func loadEKChainFiles(certPath, chainPath string) (ekCertDER []byte, chainDERs [][]byte, err error) {
+	b, err := os.ReadFile(certPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+	ekCertDER = b
+
+	pemBytes, err := os.ReadFile(chainPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ekCertDER, nil, nil
+		}
+		return nil, nil, err
+	}
+	rest := pemBytes
+	first := true
+	for {
+		block, r := pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type == "CERTIFICATE" {
+			if first {
+				first = false // skip leaf; already in ekCertDER
+			} else {
+				chainDERs = append(chainDERs, block.Bytes)
+			}
+		}
+		rest = r
+	}
+	return ekCertDER, chainDERs, nil
 }
 
 // ActivateCredential runs the EK-policy-bound activation that proves

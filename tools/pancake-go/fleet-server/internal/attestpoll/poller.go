@@ -11,6 +11,7 @@ package attestpoll
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -61,6 +62,12 @@ type Config struct {
 	// attestations for that generation must match. Off by default;
 	// production should pre-register policies via the API.
 	TOFU bool
+
+	// EKTrustRoots is the trust pool the poller validates an
+	// AttestResponse.EkCert chain against. Empty = skip chain
+	// verification (still records ek_cert_serial when one is
+	// present so the UI can display it).
+	EKTrustRoots *x509.CertPool
 }
 
 func (c *Config) applyDefaults() {
@@ -216,6 +223,14 @@ func (p *Poller) AttestOne(ctx context.Context, vm fleetdb.VM) error {
 		}
 	}
 
+	// EK cert chain verification — records the leaf serial regardless,
+	// and the verify result when an EKTrustRoots pool is configured.
+	ekSerial, ekVerified := p.verifyEKChain(resp.EkCert, resp.EkCertChain)
+	if status == "valid" && ekVerified != nil && !*ekVerified {
+		status = "invalid"
+		verifErr = "EK cert chain failed to validate against trust roots"
+	}
+
 	_, err = p.DB.InsertAttestation(ctx, fleetdb.Attestation{
 		VMID:               vm.ID,
 		Nonce:              nonce,
@@ -228,6 +243,8 @@ func (p *Poller) AttestOne(ctx context.Context, vm fleetdb.VM) error {
 		VerificationError:  verifErr,
 		EventLog:           resp.EventLog,
 		AttestationMode:    "custom",
+		EKCertSerial:       ekSerial,
+		EKChainVerified:    ekVerified,
 	})
 	if err != nil {
 		return fmt.Errorf("insert attestation: %w", err)
@@ -269,6 +286,49 @@ func (p *Poller) recordFailure(ctx context.Context, vmID int32, msg string) {
 	if _, err := p.DB.InsertEvent(ctx, "attestation_failure", &vmID, string(details)); err != nil {
 		log.Printf("[attestpoll] event log write failed: %v", err)
 	}
+}
+
+// verifyEKChain parses the EK cert + intermediate chain from the
+// Attest response and (when EKTrustRoots is configured) walks the
+// chain back to a trust root. Returns (serial, verified) where:
+//   - serial:   hex-upper of the leaf serial, "" if no cert provided
+//   - verified: nil if no chain to check; pointer to true/false otherwise.
+func (p *Poller) verifyEKChain(ekCertDER []byte, chainDER [][]byte) (string, *bool) {
+	if len(ekCertDER) == 0 {
+		return "", nil
+	}
+	leaf, err := x509.ParseCertificate(ekCertDER)
+	if err != nil {
+		f := false
+		return "", &f
+	}
+	serial := strings.ToUpper(leaf.SerialNumber.Text(16))
+
+	if p.Config.EKTrustRoots == nil {
+		// No trust pool configured: record the serial but don't claim
+		// verified. The dashboard shows "no trust root configured" so
+		// the operator can spot the gap.
+		return serial, nil
+	}
+
+	intermediates := x509.NewCertPool()
+	for _, der := range chainDER {
+		if c, err := x509.ParseCertificate(der); err == nil {
+			intermediates.AddCert(c)
+		}
+	}
+	opts := x509.VerifyOptions{
+		Roots:         p.Config.EKTrustRoots,
+		Intermediates: intermediates,
+		// EK certs aren't web certs — they use TPM-specific EKUs.
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	}
+	_, verr := leaf.Verify(opts)
+	verified := verr == nil
+	if !verified {
+		log.Printf("[attestpoll] EK chain verify failed serial=%s: %v", serial, verr)
+	}
+	return serial, &verified
 }
 
 // pcrsToMap turns the PCR array from Attest into {"<index>": "<hex digest>"}.

@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"log"
@@ -61,6 +62,12 @@ func main() {
 		"trust-on-first-use: auto-register expected PCRs from the first "+
 			"valid attestation for each new generation")
 
+	ekTrustBundle := flag.String("ek-trust-bundle", "",
+		"PEM file containing trust roots for EK cert chain verification "+
+			"(typically Google's vTPM root CA bundle or TPM manufacturer "+
+			"roots). When empty, the poller still records the leaf "+
+			"serial but doesn't validate the chain.")
+
 	flag.Parse()
 
 	if *dsn == "" {
@@ -87,6 +94,20 @@ func main() {
 	}
 	defer db.Pool.Close()
 
+	// Load EK trust bundle if provided
+	var ekTrustRoots *x509.CertPool
+	if *ekTrustBundle != "" {
+		b, err := os.ReadFile(*ekTrustBundle)
+		if err != nil {
+			log.Fatalf("read ek-trust-bundle %s: %v", *ekTrustBundle, err)
+		}
+		ekTrustRoots = x509.NewCertPool()
+		if !ekTrustRoots.AppendCertsFromPEM(b) {
+			log.Fatalf("ek-trust-bundle %s: no usable certs", *ekTrustBundle)
+		}
+		log.Printf("[fleet-server] loaded EK trust bundle from %s", *ekTrustBundle)
+	}
+
 	// Attestation poller — optional. Disabled when --attest-interval=0.
 	var poller *attestpoll.Poller
 	if *pollInterval > 0 {
@@ -100,6 +121,7 @@ func main() {
 			KeyFile:            *pollKey,
 			ServerNameOverride: *pollServerName,
 			TOFU:               *tofu,
+			EKTrustRoots:       ekTrustRoots,
 		})
 		if err != nil {
 			log.Fatalf("init attest poller: %v", err)

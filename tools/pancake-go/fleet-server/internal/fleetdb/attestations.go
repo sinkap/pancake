@@ -20,6 +20,10 @@ type Attestation struct {
 	VerificationError  string
 	EventLog           []byte
 	AttestationMode    string // "custom", "gce-shielded"
+
+	// EK chain verification result (migration 000003).
+	EKCertSerial    string // leaf serial (hex upper), "" when no EK cert
+	EKChainVerified *bool  // nil = no chain presented; T/F = verify result
 }
 
 // InsertAttestation appends an attestation record. Also updates the
@@ -35,14 +39,15 @@ func (db *DB) InsertAttestation(ctx context.Context, a Attestation) (int32, erro
 INSERT INTO attestation_log (
     vm_id, timestamp, nonce, pcrs, quote, signature,
     ak_pub, ek_pub, verification_status, verification_error,
-    event_log, attestation_mode
-) VALUES ($1, NOW(), $2, $3::jsonb, $4, $5, $6, $7, $8, NULLIF($9, ''), $10, $11)
+    event_log, attestation_mode, ek_cert_serial, ek_chain_verified
+) VALUES ($1, NOW(), $2, $3::jsonb, $4, $5, $6, $7, $8, NULLIF($9, ''),
+          $10, $11, NULLIF($12, ''), $13)
 RETURNING id`
 	var id int32
 	if err := tx.QueryRow(ctx, insertQ,
 		a.VMID, a.Nonce, asJSON(a.PCRs), a.Quote, a.Signature,
 		a.AKPub, a.EKPub, a.VerificationStatus, a.VerificationError,
-		a.EventLog, a.AttestationMode,
+		a.EventLog, a.AttestationMode, a.EKCertSerial, a.EKChainVerified,
 	).Scan(&id); err != nil {
 		return 0, err
 	}
@@ -56,9 +61,11 @@ RETURNING id`
 UPDATE vms
    SET last_attestation    = NOW(),
        attestation_status  = $2,
+       ek_cert_serial      = NULLIF($3, ''),
+       ek_chain_verified   = $4,
        updated_at          = NOW()
  WHERE id = $1`
-	if _, err := tx.Exec(ctx, updateQ, a.VMID, status); err != nil {
+	if _, err := tx.Exec(ctx, updateQ, a.VMID, status, a.EKCertSerial, a.EKChainVerified); err != nil {
 		return 0, err
 	}
 
@@ -78,7 +85,9 @@ func (db *DB) ListAttestations(ctx context.Context, vmID int32, limit int) ([]At
 SELECT id, vm_id, timestamp, nonce, pcrs::text, quote, signature,
        ak_pub, ek_pub, verification_status,
        COALESCE(verification_error, '') AS verification_error,
-       event_log, attestation_mode
+       event_log, attestation_mode,
+       COALESCE(ek_cert_serial, '') AS ek_cert_serial,
+       ek_chain_verified
   FROM attestation_log
  WHERE vm_id = $1
  ORDER BY timestamp DESC
@@ -87,7 +96,9 @@ SELECT id, vm_id, timestamp, nonce, pcrs::text, quote, signature,
 SELECT id, vm_id, timestamp, nonce, pcrs::text, quote, signature,
        ak_pub, ek_pub, verification_status,
        COALESCE(verification_error, '') AS verification_error,
-       event_log, attestation_mode
+       event_log, attestation_mode,
+       COALESCE(ek_cert_serial, '') AS ek_cert_serial,
+       ek_chain_verified
   FROM attestation_log
  ORDER BY timestamp DESC
  LIMIT $1`
@@ -110,6 +121,7 @@ SELECT id, vm_id, timestamp, nonce, pcrs::text, quote, signature,
 					&a.Quote, &a.Signature, &a.AKPub, &a.EKPub,
 					&a.VerificationStatus, &a.VerificationError,
 					&a.EventLog, &a.AttestationMode,
+					&a.EKCertSerial, &a.EKChainVerified,
 				); err != nil {
 					return err
 				}
@@ -131,6 +143,7 @@ SELECT id, vm_id, timestamp, nonce, pcrs::text, quote, signature,
 					&a.Quote, &a.Signature, &a.AKPub, &a.EKPub,
 					&a.VerificationStatus, &a.VerificationError,
 					&a.EventLog, &a.AttestationMode,
+					&a.EKCertSerial, &a.EKChainVerified,
 				); err != nil {
 					return err
 				}

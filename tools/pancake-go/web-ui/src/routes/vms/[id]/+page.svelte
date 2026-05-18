@@ -136,6 +136,18 @@
 						<dt class="text-slate-500">Status</dt><dd><StatusBadge status={selected.verification_status} /></dd>
 						<dt class="text-slate-500">Timestamp</dt><dd>{new Date(selected.timestamp).toLocaleString()}</dd>
 						<dt class="text-slate-500">Event log</dt><dd>{selected.event_log_size} bytes</dd>
+						<dt class="text-slate-500">EK cert serial</dt>
+						<dd class="font-mono break-all">{selected.ek_cert_serial || '— (no EK cert)'}</dd>
+						<dt class="text-slate-500">EK chain</dt>
+						<dd>
+							{#if selected.ek_chain_verified === true}
+								<span class="text-emerald-700">✓ trusted</span>
+							{:else if selected.ek_chain_verified === false}
+								<span class="text-rose-700">✗ failed</span>
+							{:else}
+								<span class="text-slate-500">— no trust root configured</span>
+							{/if}
+						</dd>
 					</dl>
 					{#if selected.verification_error}
 						<div class="mb-3 rounded-md border border-rose-200 bg-rose-50 p-2 text-xs text-rose-700">

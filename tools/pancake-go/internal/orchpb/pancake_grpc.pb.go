@@ -17,7 +17,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v3.21.12
-// source: internal/orchpb/pancake.proto
+// source: pancake.proto
 
 package orchpb
 
@@ -372,5 +372,5 @@ var Pancake_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "internal/orchpb/pancake.proto",
+	Metadata: "pancake.proto",
 }

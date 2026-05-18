@@ -23,6 +23,8 @@ type attestationJSON struct {
 	VerificationError  string          `json:"verification_error,omitempty"`
 	EventLogSize       int             `json:"event_log_size"` // size only; full log on demand
 	AttestationMode    string          `json:"attestation_mode"`
+	EKCertSerial       string          `json:"ek_cert_serial,omitempty"`
+	EKChainVerified    *bool           `json:"ek_chain_verified,omitempty"`
 }
 
 func toAttestationJSON(a fleetdb.Attestation) attestationJSON {
@@ -37,6 +39,8 @@ func toAttestationJSON(a fleetdb.Attestation) attestationJSON {
 		VerificationError:  a.VerificationError,
 		EventLogSize:       len(a.EventLog),
 		AttestationMode:    a.AttestationMode,
+		EKCertSerial:       a.EKCertSerial,
+		EKChainVerified:    a.EKChainVerified,
 	}
 	if len(a.AKPub) > 0 {
 		j.AKPubHex = hex.EncodeToString(a.AKPub)

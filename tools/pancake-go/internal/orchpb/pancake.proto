@@ -158,6 +158,18 @@ message AttestResponse {
   // bind credential-activation challenges to this name with
   // tpm2_makecredential -n.
   bytes ak_name = 8;
+
+  // EK certificate (DER), when this TPM has a manufacturer-provisioned
+  // cert in NV (real hardware TPMs, GCE vTPM). Empty for swtpm.
+  // Pancaked reads it from /etc/pancake/ek.crt at startup; pancake
+  // enroll writes it there via tpmbackend.Backend.ReadEKCert.
+  bytes ek_cert = 9;
+
+  // Optional intermediate certs back toward the manufacturer root,
+  // each DER-encoded. Verifiers build the chain ek_cert →
+  // ek_cert_chain[0] → ek_cert_chain[1] → … → root in trust bundle.
+  // Empty when the EK cert is self-signed or AIA fetch failed.
+  repeated bytes ek_cert_chain = 10;
 }
 
 message ActivateCredentialRequest {

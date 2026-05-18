@@ -38,6 +38,12 @@ export interface Attestation {
 	verification_error?: string;
 	event_log_size: number;
 	attestation_mode: string;
+	ek_cert_serial?: string;
+	// EK chain verification:
+	//   undefined → no chain was presented (swtpm)
+	//   true      → chain validated against the configured trust roots
+	//   false     → chain failed validation
+	ek_chain_verified?: boolean;
 }
 
 export interface AttestationListResponse {

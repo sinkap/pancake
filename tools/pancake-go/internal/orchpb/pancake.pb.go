@@ -17,7 +17,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v3.21.12
-// source: internal/orchpb/pancake.proto
+// source: pancake.proto
 
 package orchpb
 
@@ -44,7 +44,7 @@ type GetCurrentManifestRequest struct {
 
 func (x *GetCurrentManifestRequest) Reset() {
 	*x = GetCurrentManifestRequest{}
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[0]
+	mi := &file_pancake_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -56,7 +56,7 @@ func (x *GetCurrentManifestRequest) String() string {
 func (*GetCurrentManifestRequest) ProtoMessage() {}
 
 func (x *GetCurrentManifestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[0]
+	mi := &file_pancake_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -69,7 +69,7 @@ func (x *GetCurrentManifestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCurrentManifestRequest.ProtoReflect.Descriptor instead.
 func (*GetCurrentManifestRequest) Descriptor() ([]byte, []int) {
-	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{0}
+	return file_pancake_proto_rawDescGZIP(), []int{0}
 }
 
 // Manifest carries the three signed-by-bootstrap files for one
@@ -88,7 +88,7 @@ type Manifest struct {
 
 func (x *Manifest) Reset() {
 	*x = Manifest{}
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[1]
+	mi := &file_pancake_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -100,7 +100,7 @@ func (x *Manifest) String() string {
 func (*Manifest) ProtoMessage() {}
 
 func (x *Manifest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[1]
+	mi := &file_pancake_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -113,7 +113,7 @@ func (x *Manifest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Manifest.ProtoReflect.Descriptor instead.
 func (*Manifest) Descriptor() ([]byte, []int) {
-	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{1}
+	return file_pancake_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Manifest) GetManifestToml() []byte {
@@ -155,7 +155,7 @@ type UpdateResponse struct {
 
 func (x *UpdateResponse) Reset() {
 	*x = UpdateResponse{}
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[2]
+	mi := &file_pancake_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -167,7 +167,7 @@ func (x *UpdateResponse) String() string {
 func (*UpdateResponse) ProtoMessage() {}
 
 func (x *UpdateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[2]
+	mi := &file_pancake_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -180,7 +180,7 @@ func (x *UpdateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateResponse.ProtoReflect.Descriptor instead.
 func (*UpdateResponse) Descriptor() ([]byte, []int) {
-	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{2}
+	return file_pancake_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *UpdateResponse) GetInstalledGeneration() int32 {
@@ -220,7 +220,7 @@ type AttestRequest struct {
 
 func (x *AttestRequest) Reset() {
 	*x = AttestRequest{}
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[3]
+	mi := &file_pancake_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -232,7 +232,7 @@ func (x *AttestRequest) String() string {
 func (*AttestRequest) ProtoMessage() {}
 
 func (x *AttestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[3]
+	mi := &file_pancake_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -245,7 +245,7 @@ func (x *AttestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttestRequest.ProtoReflect.Descriptor instead.
 func (*AttestRequest) Descriptor() ([]byte, []int) {
-	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{3}
+	return file_pancake_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *AttestRequest) GetNonce() []byte {
@@ -292,14 +292,24 @@ type AttestResponse struct {
 	// AK name (TPM2B_NAME — alg + digest of AK pub area). Verifiers
 	// bind credential-activation challenges to this name with
 	// tpm2_makecredential -n.
-	AkName        []byte `protobuf:"bytes,8,opt,name=ak_name,json=akName,proto3" json:"ak_name,omitempty"`
+	AkName []byte `protobuf:"bytes,8,opt,name=ak_name,json=akName,proto3" json:"ak_name,omitempty"`
+	// EK certificate (DER), when this TPM has a manufacturer-provisioned
+	// cert in NV (real hardware TPMs, GCE vTPM). Empty for swtpm.
+	// Pancaked reads it from /etc/pancake/ek.crt at startup; pancake
+	// enroll writes it there via tpmbackend.Backend.ReadEKCert.
+	EkCert []byte `protobuf:"bytes,9,opt,name=ek_cert,json=ekCert,proto3" json:"ek_cert,omitempty"`
+	// Optional intermediate certs back toward the manufacturer root,
+	// each DER-encoded. Verifiers build the chain ek_cert →
+	// ek_cert_chain[0] → ek_cert_chain[1] → … → root in trust bundle.
+	// Empty when the EK cert is self-signed or AIA fetch failed.
+	EkCertChain   [][]byte `protobuf:"bytes,10,rep,name=ek_cert_chain,json=ekCertChain,proto3" json:"ek_cert_chain,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AttestResponse) Reset() {
 	*x = AttestResponse{}
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[4]
+	mi := &file_pancake_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -311,7 +321,7 @@ func (x *AttestResponse) String() string {
 func (*AttestResponse) ProtoMessage() {}
 
 func (x *AttestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[4]
+	mi := &file_pancake_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -324,7 +334,7 @@ func (x *AttestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttestResponse.ProtoReflect.Descriptor instead.
 func (*AttestResponse) Descriptor() ([]byte, []int) {
-	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{4}
+	return file_pancake_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AttestResponse) GetQuote() []byte {
@@ -383,6 +393,20 @@ func (x *AttestResponse) GetAkName() []byte {
 	return nil
 }
 
+func (x *AttestResponse) GetEkCert() []byte {
+	if x != nil {
+		return x.EkCert
+	}
+	return nil
+}
+
+func (x *AttestResponse) GetEkCertChain() [][]byte {
+	if x != nil {
+		return x.EkCertChain
+	}
+	return nil
+}
+
 type ActivateCredentialRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// tpm2_makecredential output: an encrypted blob bound to the AK
@@ -394,7 +418,7 @@ type ActivateCredentialRequest struct {
 
 func (x *ActivateCredentialRequest) Reset() {
 	*x = ActivateCredentialRequest{}
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[5]
+	mi := &file_pancake_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -406,7 +430,7 @@ func (x *ActivateCredentialRequest) String() string {
 func (*ActivateCredentialRequest) ProtoMessage() {}
 
 func (x *ActivateCredentialRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[5]
+	mi := &file_pancake_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -419,7 +443,7 @@ func (x *ActivateCredentialRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActivateCredentialRequest.ProtoReflect.Descriptor instead.
 func (*ActivateCredentialRequest) Descriptor() ([]byte, []int) {
-	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{5}
+	return file_pancake_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ActivateCredentialRequest) GetBlob() []byte {
@@ -440,7 +464,7 @@ type ActivateCredentialResponse struct {
 
 func (x *ActivateCredentialResponse) Reset() {
 	*x = ActivateCredentialResponse{}
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[6]
+	mi := &file_pancake_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -452,7 +476,7 @@ func (x *ActivateCredentialResponse) String() string {
 func (*ActivateCredentialResponse) ProtoMessage() {}
 
 func (x *ActivateCredentialResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[6]
+	mi := &file_pancake_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -465,7 +489,7 @@ func (x *ActivateCredentialResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActivateCredentialResponse.ProtoReflect.Descriptor instead.
 func (*ActivateCredentialResponse) Descriptor() ([]byte, []int) {
-	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{6}
+	return file_pancake_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ActivateCredentialResponse) GetSecret() []byte {
@@ -487,7 +511,7 @@ type AttestSEVSNPRequest struct {
 
 func (x *AttestSEVSNPRequest) Reset() {
 	*x = AttestSEVSNPRequest{}
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[7]
+	mi := &file_pancake_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -499,7 +523,7 @@ func (x *AttestSEVSNPRequest) String() string {
 func (*AttestSEVSNPRequest) ProtoMessage() {}
 
 func (x *AttestSEVSNPRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[7]
+	mi := &file_pancake_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -512,7 +536,7 @@ func (x *AttestSEVSNPRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttestSEVSNPRequest.ProtoReflect.Descriptor instead.
 func (*AttestSEVSNPRequest) Descriptor() ([]byte, []int) {
-	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{7}
+	return file_pancake_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AttestSEVSNPRequest) GetNonce() []byte {
@@ -541,7 +565,7 @@ type AttestSEVSNPResponse struct {
 
 func (x *AttestSEVSNPResponse) Reset() {
 	*x = AttestSEVSNPResponse{}
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[8]
+	mi := &file_pancake_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -553,7 +577,7 @@ func (x *AttestSEVSNPResponse) String() string {
 func (*AttestSEVSNPResponse) ProtoMessage() {}
 
 func (x *AttestSEVSNPResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[8]
+	mi := &file_pancake_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -566,7 +590,7 @@ func (x *AttestSEVSNPResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttestSEVSNPResponse.ProtoReflect.Descriptor instead.
 func (*AttestSEVSNPResponse) Descriptor() ([]byte, []int) {
-	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{8}
+	return file_pancake_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AttestSEVSNPResponse) GetReport() []byte {
@@ -597,7 +621,7 @@ type AttestResponse_PcrDigest struct {
 
 func (x *AttestResponse_PcrDigest) Reset() {
 	*x = AttestResponse_PcrDigest{}
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[9]
+	mi := &file_pancake_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -609,7 +633,7 @@ func (x *AttestResponse_PcrDigest) String() string {
 func (*AttestResponse_PcrDigest) ProtoMessage() {}
 
 func (x *AttestResponse_PcrDigest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_orchpb_pancake_proto_msgTypes[9]
+	mi := &file_pancake_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -622,7 +646,7 @@ func (x *AttestResponse_PcrDigest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttestResponse_PcrDigest.ProtoReflect.Descriptor instead.
 func (*AttestResponse_PcrDigest) Descriptor() ([]byte, []int) {
-	return file_internal_orchpb_pancake_proto_rawDescGZIP(), []int{4, 0}
+	return file_pancake_proto_rawDescGZIP(), []int{4, 0}
 }
 
 func (x *AttestResponse_PcrDigest) GetIndex() int32 {
@@ -639,11 +663,11 @@ func (x *AttestResponse_PcrDigest) GetSha256() []byte {
 	return nil
 }
 
-var File_internal_orchpb_pancake_proto protoreflect.FileDescriptor
+var File_pancake_proto protoreflect.FileDescriptor
 
-const file_internal_orchpb_pancake_proto_rawDesc = "" +
+const file_pancake_proto_rawDesc = "" +
 	"\n" +
-	"\x1dinternal/orchpb/pancake.proto\x12\n" +
+	"\rpancake.proto\x12\n" +
 	"pancake.v1\"\x1b\n" +
 	"\x19GetCurrentManifestRequest\"j\n" +
 	"\bManifest\x12#\n" +
@@ -656,7 +680,7 @@ const file_internal_orchpb_pancake_proto_rawDesc = "" +
 	"\x05error\x18\x03 \x01(\tR\x05error\"9\n" +
 	"\rAttestRequest\x12\x14\n" +
 	"\x05nonce\x18\x01 \x01(\fR\x05nonce\x12\x12\n" +
-	"\x04pcrs\x18\x02 \x03(\x05R\x04pcrs\"\xb6\x02\n" +
+	"\x04pcrs\x18\x02 \x03(\x05R\x04pcrs\"\xf3\x02\n" +
 	"\x0eAttestResponse\x12\x14\n" +
 	"\x05quote\x18\x01 \x01(\fR\x05quote\x12\x1c\n" +
 	"\tsignature\x18\x02 \x01(\fR\tsignature\x12\x15\n" +
@@ -665,7 +689,10 @@ const file_internal_orchpb_pancake_proto_rawDesc = "" +
 	"\x03pcr\x18\x05 \x03(\v2$.pancake.v1.AttestResponse.PcrDigestR\x03pcr\x12\x1b\n" +
 	"\tevent_log\x18\x06 \x01(\fR\beventLog\x12\x19\n" +
 	"\bpcrs_bin\x18\a \x01(\fR\apcrsBin\x12\x17\n" +
-	"\aak_name\x18\b \x01(\fR\x06akName\x1a9\n" +
+	"\aak_name\x18\b \x01(\fR\x06akName\x12\x17\n" +
+	"\aek_cert\x18\t \x01(\fR\x06ekCert\x12\"\n" +
+	"\rek_cert_chain\x18\n" +
+	" \x03(\fR\vekCertChain\x1a9\n" +
 	"\tPcrDigest\x12\x14\n" +
 	"\x05index\x18\x01 \x01(\x05R\x05index\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\fR\x06sha256\"/\n" +
@@ -686,19 +713,19 @@ const file_internal_orchpb_pancake_proto_rawDesc = "" +
 	"\fAttestSEVSNP\x12\x1f.pancake.v1.AttestSEVSNPRequest\x1a .pancake.v1.AttestSEVSNPResponseB<Z:github.com/sinkap/pancake/tools/pancake-go/internal/orchpbb\x06proto3"
 
 var (
-	file_internal_orchpb_pancake_proto_rawDescOnce sync.Once
-	file_internal_orchpb_pancake_proto_rawDescData []byte
+	file_pancake_proto_rawDescOnce sync.Once
+	file_pancake_proto_rawDescData []byte
 )
 
-func file_internal_orchpb_pancake_proto_rawDescGZIP() []byte {
-	file_internal_orchpb_pancake_proto_rawDescOnce.Do(func() {
-		file_internal_orchpb_pancake_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_internal_orchpb_pancake_proto_rawDesc), len(file_internal_orchpb_pancake_proto_rawDesc)))
+func file_pancake_proto_rawDescGZIP() []byte {
+	file_pancake_proto_rawDescOnce.Do(func() {
+		file_pancake_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_pancake_proto_rawDesc), len(file_pancake_proto_rawDesc)))
 	})
-	return file_internal_orchpb_pancake_proto_rawDescData
+	return file_pancake_proto_rawDescData
 }
 
-var file_internal_orchpb_pancake_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
-var file_internal_orchpb_pancake_proto_goTypes = []any{
+var file_pancake_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_pancake_proto_goTypes = []any{
 	(*GetCurrentManifestRequest)(nil),  // 0: pancake.v1.GetCurrentManifestRequest
 	(*Manifest)(nil),                   // 1: pancake.v1.Manifest
 	(*UpdateResponse)(nil),             // 2: pancake.v1.UpdateResponse
@@ -710,7 +737,7 @@ var file_internal_orchpb_pancake_proto_goTypes = []any{
 	(*AttestSEVSNPResponse)(nil),       // 8: pancake.v1.AttestSEVSNPResponse
 	(*AttestResponse_PcrDigest)(nil),   // 9: pancake.v1.AttestResponse.PcrDigest
 }
-var file_internal_orchpb_pancake_proto_depIdxs = []int32{
+var file_pancake_proto_depIdxs = []int32{
 	9, // 0: pancake.v1.AttestResponse.pcr:type_name -> pancake.v1.AttestResponse.PcrDigest
 	0, // 1: pancake.v1.Pancake.GetCurrentManifest:input_type -> pancake.v1.GetCurrentManifestRequest
 	1, // 2: pancake.v1.Pancake.Update:input_type -> pancake.v1.Manifest
@@ -729,26 +756,26 @@ var file_internal_orchpb_pancake_proto_depIdxs = []int32{
 	0, // [0:1] is the sub-list for field type_name
 }
 
-func init() { file_internal_orchpb_pancake_proto_init() }
-func file_internal_orchpb_pancake_proto_init() {
-	if File_internal_orchpb_pancake_proto != nil {
+func init() { file_pancake_proto_init() }
+func file_pancake_proto_init() {
+	if File_pancake_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_orchpb_pancake_proto_rawDesc), len(file_internal_orchpb_pancake_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pancake_proto_rawDesc), len(file_pancake_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_internal_orchpb_pancake_proto_goTypes,
-		DependencyIndexes: file_internal_orchpb_pancake_proto_depIdxs,
-		MessageInfos:      file_internal_orchpb_pancake_proto_msgTypes,
+		GoTypes:           file_pancake_proto_goTypes,
+		DependencyIndexes: file_pancake_proto_depIdxs,
+		MessageInfos:      file_pancake_proto_msgTypes,
 	}.Build()
-	File_internal_orchpb_pancake_proto = out.File
-	file_internal_orchpb_pancake_proto_goTypes = nil
-	file_internal_orchpb_pancake_proto_depIdxs = nil
+	File_pancake_proto = out.File
+	file_pancake_proto_goTypes = nil
+	file_pancake_proto_depIdxs = nil
 }

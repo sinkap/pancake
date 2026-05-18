@@ -197,6 +197,18 @@ func cmdEnroll(_ *kit.Kit, args []string) int {
 		return die(err)
 	}
 
+	// (a.1) EK cert from NV — only present on real TPMs / GCE vTPM.
+	// On swtpm this is a no-op. The cert lands at /etc/pancake/ek.crt
+	// where pancaked reads it for AttestResponse.
+	if wrote, err := writeEKCert(context.Background(), backend,
+		defaultEKCertPath, defaultEKChainPath); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"[enroll] WARN: EK cert read failed: %v (continuing without)\n", err)
+	} else if !wrote {
+		fmt.Fprintf(os.Stderr,
+			"[enroll] no manufacturer EK cert in NV (expected on swtpm)\n")
+	}
+
 	if *skipACME {
 		fmt.Fprintln(os.Stderr,
 			"[enroll] --skip-acme set; done after EK export")
