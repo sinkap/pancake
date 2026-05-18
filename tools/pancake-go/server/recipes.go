@@ -628,9 +628,6 @@ func (s *Server) bakeOrchConfig(
 	workRoot string, in *buildpb.PancakeInternal,
 ) (*buildpb.LayerHandle, error) {
 	caURL := strings.TrimSpace(in.Params["ca-url"])
-	if caURL == "" {
-		return nil, fmt.Errorf("orch-config: params[ca-url] required")
-	}
 	attestURL := strings.TrimSpace(in.Params["attest-ca-url"])
 	fleetURL := strings.TrimSpace(in.Params["fleet-server"])
 	ekTrust := strings.TrimSpace(in.Params["ek-trust"])
@@ -644,6 +641,13 @@ func (s *Server) bakeOrchConfig(
 	}
 	if issuanceCA == "" {
 		issuanceCA = "step-ca"
+	}
+	// ca-url is the step-ca ACME directory; required ONLY for step-ca
+	// issuance. With gcp-cas the VM dials Google's CAS via gRPC, no
+	// step-ca URL involved. Reject empty ca-url for step-ca; accept
+	// for gcp-cas.
+	if issuanceCA == "step-ca" && caURL == "" {
+		return nil, fmt.Errorf("orch-config: params[ca-url] required for issuance-ca=step-ca")
 	}
 	if issuanceCA == "gcp-cas" && casPool == "" {
 		return nil, fmt.Errorf("orch-config: issuance-ca=gcp-cas requires cas-pool")

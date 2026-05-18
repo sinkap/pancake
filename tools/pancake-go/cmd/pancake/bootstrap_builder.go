@@ -37,11 +37,28 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// wantsEFI reports whether the server should build the EFI disk for
+// this run. True if the operator either:
+//   - asked for a local EFI file (outputs.efi: in recipe), OR
+//   - asked for a GCP GCS upload (platform=gcp + gce.bucket).
+// Either trigger means "build the EFI"; the difference is only WHERE
+// the bytes land (local disk vs server-side GCS upload).
+func (a bootstrapArgs) wantsEFI() bool {
+	if a.EFIPath != "" {
+		return true
+	}
+	if (a.Platform == "gcp" || a.Platform == "gce") && a.GCE.Bucket != "" {
+		return true
+	}
+	return false
+}
+
 // buildImageRequest assembles the BuildImageRequest for the wire. Pulled
 // out of bootstrapViaBuilder so it's testable without dialing gRPC or
 // running mksquashfs. `now` is plumbed in (rather than time.Now()) so
 // tests can assert on the GcsUpload.ObjectName format deterministically.
 func buildImageRequest(a bootstrapArgs, packages []*buildpb.Package, now time.Time) *buildpb.BuildImageRequest {
+	wantsEFI := a.wantsEFI()
 	req := &buildpb.BuildImageRequest{
 		Packages:      packages,
 		Cmdline:       a.Cmdline,
@@ -49,26 +66,31 @@ func buildImageRequest(a bootstrapArgs, packages []*buildpb.Package, now time.Ti
 		WantDiskImage: a.ImagePath != "",
 		WantInitramfs: a.InitramfsPath != "",
 		WantBzimage:   a.BzImageOutPath != "",
-		WantUki:       a.EFIPath != "",
-		WantEfiDisk:   a.EFIPath != "",
+		WantUki:       wantsEFI,
+		WantEfiDisk:   wantsEFI && a.EFIPath != "", // local stream only when path set
 		WantManifest:  true,
 		WantPubkey:    true,
 		Counter:       1,
 		Description:   "initial generation (thin-client)",
 	}
-	// platform=gcp: route the EFI disk to GCS server-side rather than
-	// pulling the bytes over the WAN. Skip want_efi_disk so the server
-	// doesn't queue chunks; server's GCS_INFO chunk replaces them.
-	// Local-dev mode (platform empty/dev) keeps streaming, unchanged.
+	// platform=gcp + bucket: server uploads EFI to GCS directly. Build
+	// it on the server, but don't stream the bytes back. ObjectName
+	// derives from gce.image-family when set (e.g.
+	// pancake-os-20260518T192532Z.tar.gz), keeping the URI's "name in
+	// the bucket" stable + meaningful.
 	if (a.Platform == "gcp" || a.Platform == "gce") && a.GCE.Bucket != "" {
+		stem := a.GCE.ImageFamily
+		if stem == "" {
+			stem = "pancake-os"
+		}
 		req.GcsUpload = &buildpb.GCSUpload{
 			Bucket:      a.GCE.Bucket,
-			ObjectName:  fmt.Sprintf("pancake-os-%s.tar.gz", now.UTC().Format("20060102T150405Z")),
+			ObjectName:  fmt.Sprintf("%s-%s.tar.gz", stem, now.UTC().Format("20060102T150405Z")),
 			CreateImage: a.GCE.CreateImage,
 			ImageFamily: a.GCE.ImageFamily,
 			Project:     a.GCE.Project,
 		}
-		req.WantEfiDisk = false
+		req.WantEfiDisk = false // server uploads, doesn't stream
 	}
 	return req
 }

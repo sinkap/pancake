@@ -477,11 +477,21 @@ type OrchArgs struct {
 	CASPool string
 }
 
-// hasURLs reports whether orchestrator URLs were provided.
-// Only CAURL is required; AttestCAURL is optional (unified CA mode).
-func (o OrchArgs) hasURLs() bool {
-	return o.CAURL != ""
+// needsOrchConfig reports whether the orch-config layer should be
+// baked into the image. True when ANY orchestrator-side field is
+// configured: step-ca URL (legacy), CAS issuance, EK trust override,
+// or a fleet-server endpoint. False = no orch-config layer, VM boots
+// with no orchestrator connection (rare; useful for offline kits).
+func (o OrchArgs) needsOrchConfig() bool {
+	return o.CAURL != "" ||
+		o.IssuanceCA == "gcp-cas" ||
+		o.FleetServer != "" ||
+		(o.EKTrust != "" && o.EKTrust != "dev-ek-ca")
 }
+
+// hasURLs is the deprecated name. Kept so out-of-tree callers (if any)
+// don't break; new code should use needsOrchConfig.
+func (o OrchArgs) hasURLs() bool { return o.needsOrchConfig() }
 
 
 
