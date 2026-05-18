@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/attestpoll"
 	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetdb"
 )
 
 // API holds shared dependencies for HTTP handlers.
 type API struct {
-	DB *fleetdb.DB
+	DB     *fleetdb.DB
+	Poller *attestpoll.Poller // optional; when nil, on-demand attest returns 503
 }
 
 // Routes wires REST endpoints onto a fresh ServeMux and returns it.
@@ -28,6 +30,7 @@ func (a *API) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/vms", a.listVMs)
 	mux.HandleFunc("GET /api/v1/vms/{id}", a.getVM)
 	mux.HandleFunc("GET /api/v1/vms/{id}/attestations", a.listAttestationsForVM)
+	mux.HandleFunc("POST /api/v1/vms/{id}/attest", a.attestVM)
 
 	// Attestations (fleet-wide)
 	mux.HandleFunc("GET /api/v1/attestations", a.listAttestations)

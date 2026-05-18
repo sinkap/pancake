@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -96,4 +97,37 @@ func (a *API) getVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toVMJSON(*v))
+}
+
+// attestVM triggers an immediate attestation of the named VM via the
+// poller. Returns 202 on dispatch (the result lands in attestation_log
+// shortly); returns 503 if the poller wasn't enabled at server start.
+func (a *API) attestVM(w http.ResponseWriter, r *http.Request) {
+	if a.Poller == nil {
+		writeError(w, http.StatusServiceUnavailable,
+			"poller disabled — restart with mTLS materials to enable on-demand attest")
+		return
+	}
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	v, err := a.DB.GetVMByID(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "vm not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := a.Poller.AttestOne(r.Context(), *v); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "ok",
+		"message": "attestation completed; see /api/v1/vms/" + strconv.FormatInt(int64(id), 10) + "/attestations",
+	})
 }

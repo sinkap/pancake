@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc"
 
 	fleetserver "github.com/sinkap/pancake/tools/pancake-go/fleet-server"
+	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/attestpoll"
 	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetapi"
 	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetdb"
 	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetgrpc"
@@ -35,6 +36,23 @@ func main() {
 		"PostgreSQL DSN, e.g. postgres://pancake:secret@db/pancake_fleet?sslmode=disable. "+
 			"Falls back to $DATABASE_URL.")
 	skipMigrate := flag.Bool("skip-migrate", false, "skip migrations on startup")
+
+	// Attestation poller flags
+	pollInterval := flag.Duration("attest-interval", 60*time.Second,
+		"how often to attest every VM (0 = disable polling)")
+	pollConcurrency := flag.Int("attest-concurrency", 10,
+		"max parallel Attest RPCs per sweep")
+	pollVMPort := flag.Int("attest-vm-port", 7878,
+		"gRPC port pancaked listens on inside each VM")
+	pollCA := flag.String("attest-ca-file", "",
+		"CA bundle for mTLS to pancaked (step-ca root)")
+	pollCert := flag.String("attest-cert-file", "",
+		"client cert PEM for mTLS to pancaked")
+	pollKey := flag.String("attest-key-file", "",
+		"client key PEM for mTLS to pancaked")
+	pollServerName := flag.String("attest-server-name", "",
+		"override SNI/cert hostname when dialing pancaked (default: VM name)")
+
 	flag.Parse()
 
 	if *dsn == "" {
@@ -61,8 +79,29 @@ func main() {
 	}
 	defer db.Pool.Close()
 
-	// HTTP server
-	api := &fleetapi.API{DB: db}
+	// Attestation poller — optional. Disabled when --attest-interval=0.
+	var poller *attestpoll.Poller
+	if *pollInterval > 0 {
+		var err error
+		poller, err = attestpoll.New(db, attestpoll.Config{
+			Interval:           *pollInterval,
+			MaxConcurrent:      *pollConcurrency,
+			VMPort:             *pollVMPort,
+			CAFile:             *pollCA,
+			CertFile:           *pollCert,
+			KeyFile:            *pollKey,
+			ServerNameOverride: *pollServerName,
+		})
+		if err != nil {
+			log.Fatalf("init attest poller: %v", err)
+		}
+		go poller.Run(ctx)
+	} else {
+		log.Println("[fleet-server] attestation poller disabled (--attest-interval=0)")
+	}
+
+	// HTTP server (API can trigger on-demand attestation via poller)
+	api := &fleetapi.API{DB: db, Poller: poller}
 	httpSrv := &http.Server{
 		Addr:              *httpAddr,
 		Handler:           api.Routes(),
