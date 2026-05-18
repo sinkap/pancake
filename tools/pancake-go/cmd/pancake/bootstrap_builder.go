@@ -37,6 +37,42 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// buildImageRequest assembles the BuildImageRequest for the wire. Pulled
+// out of bootstrapViaBuilder so it's testable without dialing gRPC or
+// running mksquashfs. `now` is plumbed in (rather than time.Now()) so
+// tests can assert on the GcsUpload.ObjectName format deterministically.
+func buildImageRequest(a bootstrapArgs, packages []*buildpb.Package, now time.Time) *buildpb.BuildImageRequest {
+	req := &buildpb.BuildImageRequest{
+		Packages:      packages,
+		Cmdline:       a.Cmdline,
+		KernelUname:   a.Kernel,
+		WantDiskImage: a.ImagePath != "",
+		WantInitramfs: a.InitramfsPath != "",
+		WantBzimage:   a.BzImageOutPath != "",
+		WantUki:       a.EFIPath != "",
+		WantEfiDisk:   a.EFIPath != "",
+		WantManifest:  true,
+		WantPubkey:    true,
+		Counter:       1,
+		Description:   "initial generation (thin-client)",
+	}
+	// platform=gcp: route the EFI disk to GCS server-side rather than
+	// pulling the bytes over the WAN. Skip want_efi_disk so the server
+	// doesn't queue chunks; server's GCS_INFO chunk replaces them.
+	// Local-dev mode (platform empty/dev) keeps streaming, unchanged.
+	if (a.Platform == "gcp" || a.Platform == "gce") && a.GCE.Bucket != "" {
+		req.GcsUpload = &buildpb.GCSUpload{
+			Bucket:      a.GCE.Bucket,
+			ObjectName:  fmt.Sprintf("pancake-os-%s.tar.gz", now.UTC().Format("20060102T150405Z")),
+			CreateImage: a.GCE.CreateImage,
+			ImageFamily: a.GCE.ImageFamily,
+			Project:     a.GCE.Project,
+		}
+		req.WantEfiDisk = false
+	}
+	return req
+}
+
 func bootstrapViaBuilder(a bootstrapArgs) error {
 	if err := os.MkdirAll(a.Output, 0o755); err != nil {
 		return err
@@ -278,41 +314,12 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 		"[bootstrap] BuildImage(%d apt + %d internal) — server-built\n",
 		len(pkgList), internalCount)
 
-	req := &buildpb.BuildImageRequest{
-		Packages:      packages,
-		Cmdline:       a.Cmdline,
-		KernelUname:   a.Kernel,
-		WantDiskImage: a.ImagePath != "",
-		WantInitramfs: a.InitramfsPath != "",
-		WantBzimage:   a.BzImageOutPath != "",
-		WantUki:       a.EFIPath != "",
-		WantEfiDisk:   a.EFIPath != "",
-		WantManifest:  true,
-		WantPubkey:    true,
-		Counter:       1,
-		Description:   "initial generation (thin-client)",
-	}
-
-	// platform=gcp: route the EFI disk to GCS server-side rather than
-	// pulling the bytes over the WAN. Skip want_efi_disk so the server
-	// doesn't queue chunks; server's GCS_INFO chunk replaces them.
-	// Local-dev mode (platform empty/dev) keeps streaming, unchanged.
-	gcpUploadActive := false
-	if (a.Platform == "gcp" || a.Platform == "gce") && a.GCE.Bucket != "" {
-		obj := fmt.Sprintf("pancake-os-%s.tar.gz",
-			time.Now().UTC().Format("20060102T150405Z"))
-		req.GcsUpload = &buildpb.GCSUpload{
-			Bucket:      a.GCE.Bucket,
-			ObjectName:  obj,
-			CreateImage: a.GCE.CreateImage,
-			ImageFamily: a.GCE.ImageFamily,
-			Project:     a.GCE.Project,
-		}
-		req.WantEfiDisk = false
-		gcpUploadActive = true
+	req := buildImageRequest(a, packages, time.Now())
+	gcpUploadActive := req.GcsUpload != nil
+	if gcpUploadActive {
 		fmt.Fprintf(os.Stderr,
 			"[bootstrap] gcs_upload: server will push EFI directly to %s/%s\n",
-			a.GCE.Bucket, obj)
+			a.GCE.Bucket, req.GcsUpload.ObjectName)
 	}
 	stream, err := cli.BuildImage(ctx, req)
 	if err != nil {

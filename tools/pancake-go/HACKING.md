@@ -35,6 +35,37 @@ as containers via `compose.yaml`:
 docker compose up -d --build
 ```
 
+## Local-dev regression test (run before bootstrap-touching commits)
+
+The fast-feedback unit test for `bootstrap_builder`'s request shaping
+runs in CI:
+
+```
+go test ./cmd/pancake/...
+```
+
+The full end-to-end smoke test wraps the local docker compose stack
++ a real `pancake bootstrap` run + artifact assertions. It needs
+sudo on the host (for mksquashfs / veritysetup) and a kernel tree
+referenced by `pancake-recipe.yaml`. Operator-driven; not in CI:
+
+```
+./scripts/smoketest-local.sh
+```
+
+Pass it before any commit that touches:
+- `cmd/pancake/`
+- `server/{build_image,buildimage_handler,gcs_upload}.go`
+- `internal/layer/`, `internal/initramfs/`, `initramfs/init`
+- `internal/buildpb/build.proto` (regen + smoke)
+
+If you bumped layer format (e.g. switched compression), wipe the
+cache first so the assertion checks against fresh layers:
+
+```
+docker volume rm pancake-go_pancake-build-cache
+```
+
 ## Regenerating protobuf bindings
 
 The committed `*.pb.go` and `*_grpc.pb.go` files under
