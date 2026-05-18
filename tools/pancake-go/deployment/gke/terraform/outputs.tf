@@ -29,3 +29,23 @@ output "fleet_server_gsa_email" {
   description = "Bind this to the pancake-fleet/fleet-server-sa KSA via Workload Identity"
   value       = google_service_account.fleet_server.email
 }
+
+output "cas_pool_resource_name" {
+  description = "Pass to recipe as issuance.cas.pool"
+  value       = "projects/${var.project_id}/locations/${var.region}/caPools/${google_privateca_ca_pool.fleet.name}"
+}
+
+output "pancake_vm_gsa_email" {
+  description = "Service account each Shielded VM should run as (cert requester on the CAS pool)"
+  value       = google_service_account.pancake_vm.email
+}
+
+output "build_server_internal_ip" {
+  description = "Internal IP of the build-server GCE VM; reachable from the GKE fleet-server"
+  value       = google_compute_instance.build_server.network_interface[0].network_ip
+}
+
+output "build_server_external_ip" {
+  description = "External IP of the build-server VM (lock down via firewall in prod)"
+  value       = google_compute_instance.build_server.network_interface[0].access_config[0].nat_ip
+}

@@ -26,3 +26,15 @@ variable "db_tier" {
   type        = string
   default     = "db-g1-small"
 }
+
+variable "build_server_image" {
+  description = "Artifact Registry image for pancake-build-server"
+  type        = string
+  default     = ""
+}
+
+variable "sign_server_image" {
+  description = "Artifact Registry image for pancake-sign"
+  type        = string
+  default     = ""
+}

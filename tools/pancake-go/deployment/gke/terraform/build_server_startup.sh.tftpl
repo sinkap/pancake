@@ -1,0 +1,78 @@
+#!/bin/bash
+# startup.sh: bring up the pancake build server on first boot.
+#
+# Idempotent — re-running just re-fetches the trust roots and ensures
+# compose is up. Run by GCE on every boot via metadata_startup_script.
+
+set -eux
+exec > >(tee -a /var/log/pancake-build-startup.log) 2>&1
+
+# 1. Docker + compose plugin
+if ! command -v docker >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y ca-certificates curl gnupg jq
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/debian/gpg | \
+    gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  chmod a+r /etc/apt/keyrings/docker.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+    https://download.docker.com/linux/debian bookworm stable" \
+    > /etc/apt/sources.list.d/docker.list
+  apt-get update
+  apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+fi
+
+# 2. Artifact Registry helper using the instance service account
+gcloud auth configure-docker ${artifact_registry} --quiet
+
+# 3. Trust dir for the build server
+TRUST_DIR=/var/lib/pancake-build-server/trust
+mkdir -p "$TRUST_DIR"
+
+# 3a. CAS pool root → cas-pool-root.pem
+# The pool's root cert is needed at bake time so pancaked's mTLS server
+# config trusts CAS-issued client certs.
+gcloud privateca pools get-ca-certs ${cas_pool_name} --location=${region} \
+  > "$TRUST_DIR/cas-pool-root.pem"
+
+# 3b. Google vTPM root bundle → google-vtpm-roots.pem
+# Google doesn't publish a stable URL for vTPM roots. Operators must
+# fetch them from a known-good Shielded VM and place at /etc/pancake/
+# google-vtpm-roots.pem before deploying. We mount that into the
+# trust dir if present.
+if [ -f /etc/pancake/google-vtpm-roots.pem ]; then
+  install -m 0644 /etc/pancake/google-vtpm-roots.pem \
+    "$TRUST_DIR/google-vtpm-roots.pem"
+fi
+
+# 4. Compose for build-server + sign-server
+COMPOSE_DIR=/opt/pancake
+mkdir -p "$COMPOSE_DIR"
+cat > "$COMPOSE_DIR/compose.yaml" <<EOF
+services:
+  pancake-build-server:
+    image: ${build_server_image}
+    container_name: pancake-build-server
+    privileged: true
+    restart: always
+    ports:
+      - "7879:7879"
+    volumes:
+      - /var/lib/pancake-build-server:/var/lib/pancake-build-server
+      - /dev:/dev
+    command:
+      - "-listen=:7879"
+      - "-cache=/var/lib/pancake-build-server"
+      - "-trust-dir=/var/lib/pancake-build-server/trust"
+      - "-sign-addr=http://pancake-sign:7880"
+
+  pancake-sign:
+    image: ${sign_server_image}
+    container_name: pancake-sign
+    restart: always
+    ports:
+      - "7880:7880"
+EOF
+
+docker compose -f "$COMPOSE_DIR/compose.yaml" pull
+docker compose -f "$COMPOSE_DIR/compose.yaml" up -d

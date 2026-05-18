@@ -24,6 +24,9 @@ resource "google_project_service" "required" {
     "sqladmin.googleapis.com",
     "secretmanager.googleapis.com",
     "iam.googleapis.com",
+    "privateca.googleapis.com",
+    "storage.googleapis.com",
+    "artifactregistry.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false
