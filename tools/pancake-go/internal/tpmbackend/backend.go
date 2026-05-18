@@ -7,8 +7,18 @@
 package tpmbackend
 
 import (
+	"context"
+	"crypto/x509"
 	"fmt"
 	"os"
+)
+
+// TCG TPM 2.0 EK Credential Profile § 2.2.1 defines the NV indices for
+// manufacturer-provisioned EK certificates. Pancake reads them in this
+// order; the ECC index matches the EK pancake creates (`tpm2_createek -G ecc`).
+const (
+	NVIndexECCEKCert = "0x01c0000a" // ECC NIST P256 EK certificate
+	NVIndexRSAEKCert = "0x01c00002" // RSA 2048 EK certificate
 )
 
 // Backend abstracts platform-specific TPM details.
@@ -29,6 +39,15 @@ type Backend interface {
 
 	// Platform returns the platform name (self-hosted, gce, etc.)
 	Platform() string
+
+	// ReadEKCert returns the EK certificate the manufacturer provisioned
+	// into NV storage, plus any AIA-fetched intermediates back toward
+	// the root. Returns (nil, nil, nil) when no NV-stored cert exists
+	// (the swtpm case), so callers can fall back to a dev EK CA.
+	//
+	// Implementations should try the ECC index (0x01c0000a) first since
+	// pancake provisions an ECC EK, then RSA (0x01c00002) as a fallback.
+	ReadEKCert(ctx context.Context) (leaf *x509.Certificate, chain []*x509.Certificate, err error)
 }
 
 // New creates a Backend for the given platform.

@@ -1,6 +1,8 @@
 package tpmbackend
 
 import (
+	"context"
+	"crypto/x509"
 	"fmt"
 	"os"
 )
@@ -51,4 +53,12 @@ func (b *SWTPMBackend) SetupEnv() error {
 
 func (b *SWTPMBackend) Platform() string {
 	return "self-hosted"
+}
+
+// ReadEKCert is a no-op for swtpm: swtpm_setup creates a self-signed
+// EK cert but doesn't write it to NV, and even when it does the
+// signature is by a throwaway key that no fleet would trust. Callers
+// fall back to the dev EK CA path.
+func (b *SWTPMBackend) ReadEKCert(ctx context.Context) (*x509.Certificate, []*x509.Certificate, error) {
+	return nil, nil, nil
 }

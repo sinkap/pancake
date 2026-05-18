@@ -1,6 +1,8 @@
 package tpmbackend
 
 import (
+	"context"
+	"crypto/x509"
 	"fmt"
 	"os"
 )
@@ -39,4 +41,27 @@ func (b *GCEVTPMBackend) SetupEnv() error {
 
 func (b *GCEVTPMBackend) Platform() string {
 	return "gce"
+}
+
+// ReadEKCert reads the Google-signed EK cert from NV. Tries the ECC
+// index (0x01c0000a) first since pancake provisions an ECC EK, then
+// RSA (0x01c00002) as a fallback. On a Shielded VM at least one is
+// present; if neither is present we surface that as an error so the
+// caller can fail loud rather than silently fall back to dev EK CA.
+//
+// After reading the leaf, walks its AuthorityInformationAccess URLs
+// to build the chain back toward Google's vTPM root.
+func (b *GCEVTPMBackend) ReadEKCert(ctx context.Context) (*x509.Certificate, []*x509.Certificate, error) {
+	for _, idx := range []string{NVIndexECCEKCert, NVIndexRSAEKCert} {
+		cert, err := readNVCertFromTPM(ctx, idx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read EK cert at NV %s: %w", idx, err)
+		}
+		if cert != nil {
+			return cert, fetchAIAChain(ctx, cert), nil
+		}
+	}
+	return nil, nil, fmt.Errorf("no manufacturer EK cert at NV %s or %s "+
+		"(is this really a Shielded VM with Google vTPM?)",
+		NVIndexECCEKCert, NVIndexRSAEKCert)
 }
