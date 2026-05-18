@@ -159,6 +159,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		// Auto-detect orchestrator URLs from environment if not in recipe
 		caURL := r.Orchestrator.CAURL
 		attestCAURL := r.Orchestrator.AttestCAURL
+		fleetServer := r.Orchestrator.FleetServer
 
 		if caURL == "" {
 			if paths, err := hoststate.Resolve(); err == nil {
@@ -170,10 +171,14 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 				attestCAURL = paths.AttestCAURL
 			}
 		}
+		if env := os.Getenv("PANCAKE_FLEET_SERVER"); env != "" {
+			fleetServer = env
+		}
 
 		orch = OrchArgs{
 			CAURL:       caURL,
 			AttestCAURL: attestCAURL,
+			FleetServer: fleetServer,
 		}
 
 		// Capture skip-modules flag from recipe
@@ -420,6 +425,9 @@ type GCEUploadArgs struct {
 type OrchArgs struct {
 	CAURL       string
 	AttestCAURL string
+	// FleetServer is the gRPC address VMs auto-register with after enroll.
+	// Empty = no auto-enrollment.
+	FleetServer string
 }
 
 // hasURLs reports whether orchestrator URLs were provided.

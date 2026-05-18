@@ -1,0 +1,67 @@
+# Example pancake-os recipe.
+#
+# Copy to pancake-recipe.yaml (the real path is gitignored) and edit:
+#   cp pancake-recipe.yaml.example pancake-recipe.yaml
+#
+# After `docker compose up -d --wait && pancake host-cert init`,
+# build the kit with:
+#   source pancake-host-state/pancake.env
+#   pancake bootstrap pancake-recipe.yaml
+
+output: ./pancake-kit
+hostname: pancake-demo
+
+# Platform: self-hosted (default), gce, azure, aws
+# Determines: where bootstrap puts images, TPM device, metadata source
+platform: self-hosted
+
+packages:
+  - openssh-server
+  - chrony
+  - nano
+
+distro:
+  suite: noble
+
+ssh:
+  # SSH public key installed at /root/.ssh/authorized_keys
+  authorized-keys: ~/.ssh/id_ed25519.pub
+  # host-keys-dir: ""    # empty → generate fresh
+
+# Custom kernel — drop the bzimage path or set version to a uname -r value
+# you have in /lib/modules/<ver> if you want to use a stock kernel.
+kernel:
+  version: tree
+  bzimage: ~/projects/linux-bpf-for-next/arch/x86/boot/bzImage
+
+outputs:
+  image:     ./pancake-state.img
+  initramfs: ./pancake-initramfs.cpio.gz
+  bzimage:   ./pancake-bzImage
+  efi:       ./pancake-efi.img
+
+orchestrator:
+  # Unified CA mode: only ca-url is required
+  # For QEMU usernet, 10.0.2.2 is the host
+  ca-url: https://10.0.2.2:8443/acme/tpm/directory
+
+  # Optional: pancake-fleet-server gRPC address. When set, `pancake
+  # enroll` will register this VM with the fleet server after the ACME
+  # flow succeeds, so it shows up in the dashboard automatically.
+  # fleet-server: 10.0.2.2:8081
+
+# Attestation mode (orthogonal to platform):
+# - custom (default): pancake's TPM attestation, works on any platform
+# - gce-shielded: GCE Shielded VM API (only on GCE, simpler)
+# - auto: try gce-shielded if available, fallback to custom
+# attestation:
+#   mode: custom
+
+# When platform: gce, bootstrap auto-uploads pancake-efi.img to GCS using
+# Application Default Credentials (gcloud auth application-default login,
+# or $GOOGLE_APPLICATION_CREDENTIALS pointing at a service-account key).
+# gce:
+#   project: my-gcp-project
+#   bucket: gs://my-pancake-images
+#   create-image: true
+#   image-family: pancake-os

@@ -632,6 +632,7 @@ func (s *Server) bakeOrchConfig(
 		return nil, fmt.Errorf("orch-config: params[ca-url] required")
 	}
 	attestURL := strings.TrimSpace(in.Params["attest-ca-url"])
+	fleetURL := strings.TrimSpace(in.Params["fleet-server"])
 
 	if s.trustDir == "" {
 		return nil, fmt.Errorf("orch-config: server has no --trust-dir " +
@@ -685,10 +686,12 @@ func (s *Server) bakeOrchConfig(
 		TrustRoot    string `json:"trust_root"`
 		AttestCARoot string `json:"attest_ca_root,omitempty"`
 		ClientCARoot string `json:"client_ca_root"`
+		FleetServer  string `json:"fleet_server,omitempty"`
 	}{
 		CAURL:        caURL,
 		TrustRoot:    "/etc/pancake/orch/trust-root.crt",
 		ClientCARoot: "/etc/pancake/orch/trust-root.crt",
+		FleetServer:  fleetURL,
 	}
 
 	// Legacy dual-CA mode: if attest-ca-url is set, include it

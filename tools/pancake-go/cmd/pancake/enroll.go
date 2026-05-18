@@ -68,6 +68,7 @@ type orchConfig struct {
 	TrustRoot    string `json:"trust_root"`
 	AttestCARoot string `json:"attest_ca_root"`
 	ClientCARoot string `json:"client_ca_root"`
+	FleetServer  string `json:"fleet_server"`
 }
 
 // tpmKeyMarker is the small JSON file pancaked reads at startup to
@@ -231,6 +232,14 @@ func cmdEnroll(_ *kit.Kit, args []string) int {
 			"[enroll]   ek pubkey:   %s\n"+
 			"[enroll] restart pancaked: systemctl restart pancaked\n",
 		*serverCert, *keyMarker, *ekOut)
+
+	// Best-effort: register with the fleet server if one was configured.
+	// Read fleet-server from the same orch-config JSON (already loaded
+	// above into cfg if it existed).
+	if cfg, err := loadOrchConfig(*orchConfigPath); err == nil && cfg.FleetServer != "" {
+		registerWithFleet(cfg.FleetServer, *serverCert, backend)
+	}
+
 	return 0
 }
 

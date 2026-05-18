@@ -113,6 +113,12 @@ type Orchestrator struct {
 	// For QEMU/usernet that's typically https://10.0.2.2:<port>
 	// and the host forwards the docker-published ports.
 	AttestCAURL string `yaml:"attest-ca-url"`
+	// FleetServer is the pancake-fleet-server gRPC address VMs
+	// auto-register with on first successful enroll
+	// (e.g. fleet.example.com:8081 or 10.0.2.2:8081 for QEMU dev).
+	// Empty = no auto-enrollment; operator must call FleetManager.Enroll
+	// manually.
+	FleetServer string `yaml:"fleet-server"`
 }
 
 type Distro struct {

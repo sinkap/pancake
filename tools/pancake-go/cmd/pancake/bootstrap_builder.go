@@ -235,6 +235,10 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 		if a.Orch.AttestCAURL != "" {
 			params["attest-ca-url"] = a.Orch.AttestCAURL
 		}
+		// Fleet server URL for VM auto-enrollment (optional)
+		if a.Orch.FleetServer != "" {
+			params["fleet-server"] = a.Orch.FleetServer
+		}
 		packages = append(packages, &buildpb.Package{
 			Manager: &buildpb.Package_Internal{
 				Internal: &buildpb.PancakeInternal{
