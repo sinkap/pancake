@@ -1,3 +1,5 @@
+---
+# In-cluster Service for the web UI (port-forward target, no LB cost).
 apiVersion: v1
 kind: Service
 metadata:
@@ -14,3 +16,25 @@ spec:
   - name: grpc
     port: 8081
     targetPort: 8081
+---
+# Internal regional LB so pancake VMs anywhere in the project's VPC
+# can dial FleetManager.Enroll over gRPC at boot. No public IP — the
+# LB IP is in the VPC's private range (10.x.x.x or similar). Tear
+# down with: kubectl delete svc pancake-fleet-server-grpc -n pancake-fleet
+apiVersion: v1
+kind: Service
+metadata:
+  name: pancake-fleet-server-grpc
+  namespace: pancake-fleet
+  annotations:
+    # Marks the GCP forwarding rule + IP as internal-only.
+    networking.gke.io/load-balancer-type: "Internal"
+spec:
+  type: LoadBalancer
+  selector:
+    app: pancake-fleet-server
+  ports:
+  - name: grpc
+    port: 8081
+    targetPort: 8081
+    protocol: TCP

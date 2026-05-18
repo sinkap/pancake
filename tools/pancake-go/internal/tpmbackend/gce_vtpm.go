@@ -3,8 +3,14 @@ package tpmbackend
 import (
 	"context"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
+
+	compute "cloud.google.com/go/compute/apiv1"
+	computepb "cloud.google.com/go/compute/apiv1/computepb"
+
+	"github.com/sinkap/pancake/tools/pancake-go/internal/platform/gce"
 )
 
 // GCEVTPMBackend is the Google Cloud virtual TPM 2.0 backend.
@@ -43,25 +49,73 @@ func (b *GCEVTPMBackend) Platform() string {
 	return "gce"
 }
 
-// ReadEKCert reads the Google-signed EK cert from NV. Tries the ECC
-// index (0x01c0000a) first since pancake provisions an ECC EK, then
-// RSA (0x01c00002) as a fallback. On a Shielded VM at least one is
-// present; if neither is present we surface that as an error so the
-// caller can fail loud rather than silently fall back to dev EK CA.
+// ReadEKCert returns the Google-signed EK certificate for this VM.
+//
+// On hardware TPMs the EK cert lives at well-known NV indices
+// (0x01C0000A ECC, 0x01C00002 RSA). Google's vTPM does NOT populate
+// those — instead the EK cert is exposed via the Compute API endpoint
+// instances.getShieldedInstanceIdentity, which returns separate
+// PEM-encoded certs for the ECC P-256 EK and the RSA 2048 EK. We
+// prefer the ECC entry since pancake provisions an ECC EK.
+//
+// Auth: Application Default Credentials. On a Shielded VM that's the
+// instance service account; it needs roles/compute.viewer (or at
+// least compute.instances.getShieldedInstanceIdentity) on the project.
 //
 // After reading the leaf, walks its AuthorityInformationAccess URLs
 // to build the chain back toward Google's vTPM root.
 func (b *GCEVTPMBackend) ReadEKCert(ctx context.Context) (*x509.Certificate, []*x509.Certificate, error) {
-	for _, idx := range []string{NVIndexECCEKCert, NVIndexRSAEKCert} {
-		cert, err := readNVCertFromTPM(ctx, idx)
-		if err != nil {
-			return nil, nil, fmt.Errorf("read EK cert at NV %s: %w", idx, err)
-		}
-		if cert != nil {
-			return cert, fetchAIAChain(ctx, cert), nil
-		}
+	project, err := gce.GetProjectID()
+	if err != nil {
+		return nil, nil, fmt.Errorf("read GCE project from metadata: %w", err)
 	}
-	return nil, nil, fmt.Errorf("no manufacturer EK cert at NV %s or %s "+
-		"(is this really a Shielded VM with Google vTPM?)",
-		NVIndexECCEKCert, NVIndexRSAEKCert)
+	zone, err := gce.GetZone()
+	if err != nil {
+		return nil, nil, fmt.Errorf("read GCE zone from metadata: %w", err)
+	}
+	instance, err := gce.GetInstanceName()
+	if err != nil {
+		return nil, nil, fmt.Errorf("read GCE instance name from metadata: %w", err)
+	}
+
+	client, err := compute.NewInstancesRESTClient(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("compute client: %w", err)
+	}
+	defer client.Close()
+
+	resp, err := client.GetShieldedInstanceIdentity(ctx,
+		&computepb.GetShieldedInstanceIdentityInstanceRequest{
+			Project:  project,
+			Zone:     zone,
+			Instance: instance,
+		})
+	if err != nil {
+		return nil, nil, fmt.Errorf("GetShieldedInstanceIdentity(%s/%s/%s): %w",
+			project, zone, instance, err)
+	}
+
+	// Prefer ECC P-256 (pancake's EK algorithm); fall back to RSA.
+	var pemStr string
+	switch {
+	case resp.GetEccP256EncryptionKey() != nil && resp.GetEccP256EncryptionKey().GetEkCert() != "":
+		pemStr = resp.GetEccP256EncryptionKey().GetEkCert()
+	case resp.GetEncryptionKey() != nil && resp.GetEncryptionKey().GetEkCert() != "":
+		pemStr = resp.GetEncryptionKey().GetEkCert()
+	default:
+		return nil, nil, fmt.Errorf(
+			"GetShieldedInstanceIdentity returned no EK cert for %s/%s/%s "+
+				"(is the VM really shielded with --shielded-vtpm?)",
+			project, zone, instance)
+	}
+
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, nil, fmt.Errorf("Shielded VM EK cert is not a PEM CERTIFICATE block")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse Shielded VM EK cert: %w", err)
+	}
+	return cert, fetchAIAChain(ctx, cert), nil
 }
