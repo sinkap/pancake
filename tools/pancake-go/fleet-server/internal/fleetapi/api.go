@@ -5,7 +5,10 @@ package fleetapi
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/attestpoll"
 	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetdb"
@@ -15,6 +18,7 @@ import (
 type API struct {
 	DB     *fleetdb.DB
 	Poller *attestpoll.Poller // optional; when nil, on-demand attest returns 503
+	WebUI  string             // optional; path to SvelteKit build/ dir to serve at /
 }
 
 // Routes wires REST endpoints onto a fresh ServeMux and returns it.
@@ -41,7 +45,37 @@ func (a *API) Routes() *http.ServeMux {
 	// Events / transparency log
 	mux.HandleFunc("GET /api/v1/events", a.listEvents)
 
+	// SvelteKit SPA: serve from WebUI dir if configured. Fallback to
+	// index.html for SPA routes (so /vms/42 served as index.html and
+	// the client router takes over).
+	if a.WebUI != "" {
+		mux.HandleFunc("GET /", a.serveUI)
+	}
+
 	return mux
+}
+
+func (a *API) serveUI(w http.ResponseWriter, r *http.Request) {
+	// Don't serve UI for API paths — let those 404 normally.
+	if strings.HasPrefix(r.URL.Path, "/api/") ||
+		strings.HasPrefix(r.URL.Path, "/healthz") ||
+		strings.HasPrefix(r.URL.Path, "/readyz") {
+		http.NotFound(w, r)
+		return
+	}
+	// Try the requested file. If missing, fall back to index.html (SPA).
+	clean := filepath.Clean(r.URL.Path)
+	if clean == "/" {
+		clean = "/index.html"
+	}
+	full := filepath.Join(a.WebUI, clean)
+	st, err := os.Stat(full)
+	if err == nil && !st.IsDir() {
+		http.ServeFile(w, r, full)
+		return
+	}
+	// SPA fallback
+	http.ServeFile(w, r, filepath.Join(a.WebUI, "index.html"))
 }
 
 func (a *API) healthz(w http.ResponseWriter, r *http.Request) {

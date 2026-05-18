@@ -53,6 +53,10 @@ func main() {
 	pollServerName := flag.String("attest-server-name", "",
 		"override SNI/cert hostname when dialing pancaked (default: VM name)")
 
+	webUI := flag.String("web-ui", "",
+		"path to the SvelteKit build/ directory; if set, served at / "+
+			"(typically web-ui/build after `npm run build`)")
+
 	flag.Parse()
 
 	if *dsn == "" {
@@ -101,7 +105,10 @@ func main() {
 	}
 
 	// HTTP server (API can trigger on-demand attestation via poller)
-	api := &fleetapi.API{DB: db, Poller: poller}
+	api := &fleetapi.API{DB: db, Poller: poller, WebUI: *webUI}
+	if *webUI != "" {
+		log.Printf("[fleet-server] serving web UI from %s", *webUI)
+	}
 	httpSrv := &http.Server{
 		Addr:              *httpAddr,
 		Handler:           api.Routes(),
