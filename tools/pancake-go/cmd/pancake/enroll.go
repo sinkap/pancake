@@ -30,6 +30,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -38,6 +39,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/sinkap/pancake/tools/pancake-go/internal/issuance"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
 	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmbackend"
@@ -69,6 +71,19 @@ type orchConfig struct {
 	AttestCARoot string `json:"attest_ca_root"`
 	ClientCARoot string `json:"client_ca_root"`
 	FleetServer  string `json:"fleet_server"`
+
+	// IssuanceCA picks the cert issuer: "step-ca" (default) or "gcp-cas".
+	// Set at bake time from the recipe's issuance.ca field.
+	IssuanceCA string `json:"issuance_ca,omitempty"`
+
+	// CASPool is the Google CAS pool resource name when IssuanceCA is
+	// "gcp-cas" (e.g. "projects/X/locations/Y/caPools/Z").
+	CASPool string `json:"cas_pool,omitempty"`
+
+	// EKTrust picks how EK certs are trusted: "dev-ek-ca" (default),
+	// "manufacturer", or "google-vtpm". Drives whether enroll falls
+	// back to the dev EK CA path.
+	EKTrust string `json:"ek_trust,omitempty"`
 }
 
 // tpmKeyMarker is the small JSON file pancaked reads at startup to
@@ -209,18 +224,24 @@ func cmdEnroll(_ *kit.Kit, args []string) int {
 		return die(fmt.Errorf("--san parsed to zero entries"))
 	}
 
-	if err := acmeTPMEnroll(acmeTPMOpts{
-		CAURL:        *caURL,
-		CARoot:       *caRoot,
-		AttestCAURL:  *attestCAURL,
-		AttestCARoot: *attestCARoot,
-		CommonName:   cn,
-		DNSNames:     dns,
-		IPs:          ips,
-		ServerCert:   *serverCert,
-		TPMStoreDir:  *tpmStore,
-		KeyMarker:    *keyMarker,
-		AcctKeyFile:  *acctKeyFile,
+	cfgForIssuer, _ := loadOrchConfig(*orchConfigPath)
+	issuer, err := pickIssuer(cfgForIssuer, *caURL, *caRoot, *attestCAURL, *attestCARoot, *acctKeyFile)
+	if err != nil {
+		return die(err)
+	}
+	fmt.Fprintf(os.Stderr, "[enroll] issuer: %s\n", issuer.Name())
+
+	ipStrs := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		ipStrs = append(ipStrs, ip.String())
+	}
+	if err := issuer.Issue(context.Background(), issuance.Input{
+		CommonName:     cn,
+		DNSNames:       dns,
+		IPs:            ipStrs,
+		TPMStoreDir:    *tpmStore,
+		ServerCertPath: *serverCert,
+		KeyMarkerPath:  *keyMarker,
 	}); err != nil {
 		return die(err)
 	}
