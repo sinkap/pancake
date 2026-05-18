@@ -31,9 +31,11 @@ mkdir -p "$TRUST_DIR"
 
 # 3a. CAS pool root → cas-pool-root.pem
 # The pool's root cert is needed at bake time so pancaked's mTLS server
-# config trusts CAS-issued client certs.
-gcloud privateca pools get-ca-certs ${cas_pool_name} --location=${region} \
-  > "$TRUST_DIR/cas-pool-root.pem"
+# config trusts CAS-issued client certs. gcloud's get-ca-certs writes
+# via --output-file (the bare command without it errors out).
+gcloud privateca pools get-ca-certs ${cas_pool_name} \
+  --location=${region} \
+  --output-file="$TRUST_DIR/cas-pool-root.pem"
 
 # 3b. Google vTPM root bundle → google-vtpm-roots.pem
 # Google doesn't publish a stable URL for vTPM roots. Operators must
