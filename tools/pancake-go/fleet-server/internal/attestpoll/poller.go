@@ -9,6 +9,7 @@
 package attestpoll
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/x509"
@@ -225,10 +226,29 @@ func (p *Poller) AttestOne(ctx context.Context, vm fleetdb.VM) error {
 
 	// EK cert chain verification — records the leaf serial regardless,
 	// and the verify result when an EKTrustRoots pool is configured.
+	// Used by self-hosted / hardware TPM platforms where Google-style
+	// API-anchored EK trust doesn't apply.
 	ekSerial, ekVerified := p.verifyEKChain(resp.EkCert, resp.EkCertChain)
 	if status == "valid" && ekVerified != nil && !*ekVerified {
 		status = "invalid"
 		verifErr = "EK cert chain failed to validate against trust roots"
+	}
+
+	// TOFU EK pubkey check. GCE (and any other platform where the EK
+	// arrives without a manufacturer cert chain) anchors trust on the
+	// ekPub recorded at first enrollment. A mismatch here means either
+	// the VM's vTPM changed identity (legitimate but suspicious — disk
+	// re-imaged, hypervisor moved?) or the VM is being impersonated.
+	// vm.EKPub is empty when no first-enroll ekPub was ever recorded;
+	// in that case we skip the check (no anchor → nothing to verify).
+	if status == "valid" && len(vm.EKPub) > 0 {
+		if !bytes.Equal(vm.EKPub, resp.EkPub) {
+			status = "invalid"
+			verifErr = fmt.Sprintf(
+				"ekPub mismatch vs TOFU baseline: recorded %d bytes, got %d bytes — "+
+					"vTPM identity changed, refusing attestation",
+				len(vm.EKPub), len(resp.EkPub))
+		}
 	}
 
 	_, err = p.DB.InsertAttestation(ctx, fleetdb.Attestation{

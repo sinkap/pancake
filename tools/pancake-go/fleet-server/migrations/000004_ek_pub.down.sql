@@ -1,0 +1,2 @@
+ALTER TABLE vms DROP COLUMN IF EXISTS ek_pub_first_seen;
+ALTER TABLE vms DROP COLUMN IF EXISTS ek_pub;

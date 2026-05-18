@@ -25,6 +25,11 @@ import (
 	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmbackend"
 )
 
+// defaultEKPubPath: where pancake enroll writes the TPM2B_PUBLIC blob.
+// Kept here as a local constant rather than importing from enroll.go to
+// avoid widening that file's exported surface.
+const defaultEKPubPath = "/etc/pancake/ek.pub"
+
 // registerWithFleet calls FleetManager.Enroll on the configured fleet server.
 // Best-effort: errors are logged but don't fail the overall enroll flow,
 // since the fleet server is observational and shouldn't block boot.
@@ -97,6 +102,12 @@ func registerWithFleet(fleetServer string, certPEMPath string, backend tpmbacken
 	defer cc.Close()
 	cli := fleetpb.NewFleetManagerClient(cc)
 
+	// Read the EK public area; fleet server uses it as the TOFU
+	// trust anchor for later attestations. Best-effort: if /etc/pancake/
+	// ek.pub is missing or unreadable (shouldn't be after exportEK
+	// succeeded), skip the field rather than fail the enroll.
+	ekPub, _ := os.ReadFile(defaultEKPubPath)
+
 	req := &fleetpb.EnrollRequest{
 		Name:              hostname,
 		Platform:          platform,
@@ -104,6 +115,7 @@ func registerWithFleet(fleetServer string, certPEMPath string, backend tpmbacken
 		CertSerial:        certSerial,
 		CurrentGeneration: 1,
 		MetadataJson:      metadataJSON,
+		EkPub:             ekPub,
 	}
 	if certExpires != nil {
 		req.CertExpiresAt = timestamppb.New(*certExpires)

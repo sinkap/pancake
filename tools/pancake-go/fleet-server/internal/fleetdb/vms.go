@@ -23,17 +23,34 @@ type VM struct {
 	AttestationStatus string
 	CurrentGeneration int32
 	MetadataJSON      string
+	// EKPub is the TPM2B_PUBLIC blob (TPM2-marshalled, not PEM) of the
+	// VM's endorsement key. Populated at first Enroll only — TOFU
+	// semantics: subsequent enroll calls do NOT overwrite it. The
+	// attestation poller compares this against AttestResponse.EkPub.
+	EKPub          []byte
+	EKPubFirstSeen *time.Time
 }
 
 // UpsertVM inserts a new vms row or updates the existing one (by name).
 // Returns the row's id. Called on Enroll RPC.
+//
+// TOFU on ek_pub: the column is set ONCE on first insert and never
+// overwritten on subsequent re-enrolls. A VM that comes back with a
+// different ekPub at re-enroll has its mismatch surfaced only at the
+// next attestation poll (which compares AttestResponse.EkPub to the
+// stored value); the registry itself stays welcoming so a benign
+// reboot can re-register without trip-wiring the alarm.
 func (db *DB) UpsertVM(ctx context.Context, vm VM) (int32, error) {
 	const q = `
 INSERT INTO vms (
     name, platform, internal_ip, external_ip,
-    cert_serial, cert_expires_at, current_generation, metadata, updated_at
+    cert_serial, cert_expires_at, current_generation, metadata,
+    ek_pub, ek_pub_first_seen, updated_at
 ) VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''),
-          NULLIF($5, ''), $6, $7, $8::jsonb, NOW())
+          NULLIF($5, ''), $6, $7, $8::jsonb,
+          NULLIF($9, ''::bytea),
+          CASE WHEN $9::bytea <> ''::bytea THEN NOW() ELSE NULL END,
+          NOW())
 ON CONFLICT (name) DO UPDATE SET
     platform           = EXCLUDED.platform,
     internal_ip        = EXCLUDED.internal_ip,
@@ -42,6 +59,10 @@ ON CONFLICT (name) DO UPDATE SET
     cert_expires_at    = EXCLUDED.cert_expires_at,
     current_generation = EXCLUDED.current_generation,
     metadata           = EXCLUDED.metadata,
+    -- TOFU: only set ek_pub on the FIRST insert. Re-enrolls leave the
+    -- previously-recorded value untouched. The poller catches mismatch.
+    ek_pub             = COALESCE(vms.ek_pub, EXCLUDED.ek_pub),
+    ek_pub_first_seen  = COALESCE(vms.ek_pub_first_seen, EXCLUDED.ek_pub_first_seen),
     updated_at         = NOW()
 RETURNING id`
 	var id int32
@@ -49,6 +70,7 @@ RETURNING id`
 		vm.Name, vm.Platform, vm.InternalIP, vm.ExternalIP,
 		vm.CertSerial, vm.CertExpiresAt, vm.CurrentGeneration,
 		asJSON(vm.MetadataJSON),
+		vm.EKPub,
 	).Scan(&id)
 	return id, err
 }
@@ -92,7 +114,7 @@ SELECT id, name, platform,
        enrolled_at, COALESCE(cert_serial, '') AS cert_serial,
        cert_expires_at, last_heartbeat, last_attestation,
        attestation_status, COALESCE(current_generation, 0) AS current_generation,
-       metadata::text
+       metadata::text, ek_pub, ek_pub_first_seen
   FROM vms
  WHERE ($1 = '' OR platform = $1)
    AND ($2 = '' OR attestation_status = $2)
@@ -111,7 +133,7 @@ SELECT id, name, platform,
 			&v.EnrolledAt, &v.CertSerial,
 			&v.CertExpiresAt, &v.LastHeartbeat, &v.LastAttestation,
 			&v.AttestationStatus, &v.CurrentGeneration,
-			&v.MetadataJSON,
+			&v.MetadataJSON, &v.EKPub, &v.EKPubFirstSeen,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -138,7 +160,7 @@ SELECT id, name, platform,
        enrolled_at, COALESCE(cert_serial, '') AS cert_serial,
        cert_expires_at, last_heartbeat, last_attestation,
        attestation_status, COALESCE(current_generation, 0) AS current_generation,
-       metadata::text
+       metadata::text, ek_pub, ek_pub_first_seen
   FROM vms
  WHERE ` + where
 	v := &VM{}
@@ -148,7 +170,7 @@ SELECT id, name, platform,
 		&v.EnrolledAt, &v.CertSerial,
 		&v.CertExpiresAt, &v.LastHeartbeat, &v.LastAttestation,
 		&v.AttestationStatus, &v.CurrentGeneration,
-		&v.MetadataJSON,
+		&v.MetadataJSON, &v.EKPub, &v.EKPubFirstSeen,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, pgx.ErrNoRows

@@ -48,6 +48,16 @@ message EnrollRequest {
   // metadata is a JSON blob (string-encoded) for platform-specific
   // info (e.g. GCE labels, instance ID). Stored as JSONB.
   string metadata_json = 8;
+
+  // ek_pub is the TPM2B_PUBLIC blob of the VM's endorsement key
+  // (contents of /etc/pancake/ek.pub from the VM). The fleet server
+  // stores this at first enrollment (TOFU) and verifies subsequent
+  // attestations bytes-match — locking the VM to the same vTPM it
+  // first registered with. On Shielded VMs the API call to
+  // getShieldedInstanceIdentity at first boot is the trust anchor
+  // for THIS specific ekPub; subsequent attestations are equality-
+  // checked against the recorded value.
+  bytes ek_pub = 9;
 }
 
 message EnrollResponse {

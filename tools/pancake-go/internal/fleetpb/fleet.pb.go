@@ -44,7 +44,16 @@ type EnrollRequest struct {
 	CurrentGeneration int32                  `protobuf:"varint,7,opt,name=current_generation,json=currentGeneration,proto3" json:"current_generation,omitempty"`
 	// metadata is a JSON blob (string-encoded) for platform-specific
 	// info (e.g. GCE labels, instance ID). Stored as JSONB.
-	MetadataJson  string `protobuf:"bytes,8,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
+	MetadataJson string `protobuf:"bytes,8,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
+	// ek_pub is the TPM2B_PUBLIC blob of the VM's endorsement key
+	// (contents of /etc/pancake/ek.pub from the VM). The fleet server
+	// stores this at first enrollment (TOFU) and verifies subsequent
+	// attestations bytes-match — locking the VM to the same vTPM it
+	// first registered with. On Shielded VMs the API call to
+	// getShieldedInstanceIdentity at first boot is the trust anchor
+	// for THIS specific ekPub; subsequent attestations are equality-
+	// checked against the recorded value.
+	EkPub         []byte `protobuf:"bytes,9,opt,name=ek_pub,json=ekPub,proto3" json:"ek_pub,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -133,6 +142,13 @@ func (x *EnrollRequest) GetMetadataJson() string {
 		return x.MetadataJson
 	}
 	return ""
+}
+
+func (x *EnrollRequest) GetEkPub() []byte {
+	if x != nil {
+		return x.EkPub
+	}
+	return nil
 }
 
 type EnrollResponse struct {
@@ -632,7 +648,7 @@ var File_fleet_proto protoreflect.FileDescriptor
 
 const file_fleet_proto_rawDesc = "" +
 	"\n" +
-	"\vfleet.proto\x12\x10pancake.fleet.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xba\x02\n" +
+	"\vfleet.proto\x12\x10pancake.fleet.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd1\x02\n" +
 	"\rEnrollRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
 	"\bplatform\x18\x02 \x01(\tR\bplatform\x12\x1f\n" +
@@ -644,7 +660,8 @@ const file_fleet_proto_rawDesc = "" +
 	"certSerial\x12B\n" +
 	"\x0fcert_expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\rcertExpiresAt\x12-\n" +
 	"\x12current_generation\x18\a \x01(\x05R\x11currentGeneration\x12#\n" +
-	"\rmetadata_json\x18\b \x01(\tR\fmetadataJson\":\n" +
+	"\rmetadata_json\x18\b \x01(\tR\fmetadataJson\x12\x15\n" +
+	"\x06ek_pub\x18\t \x01(\fR\x05ekPub\":\n" +
 	"\x0eEnrollResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x05R\x02id\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"U\n" +

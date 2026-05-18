@@ -53,6 +53,10 @@ func (s *Server) Enroll(ctx context.Context, req *fleetpb.EnrollRequest) (*fleet
 		CertSerial:        req.GetCertSerial(),
 		CurrentGeneration: req.GetCurrentGeneration(),
 		MetadataJSON:      md,
+		// ek_pub is TOFU on first insert (see DB.UpsertVM). Empty
+		// payload from a non-TPM platform is fine — UpsertVM treats
+		// '' as NULL and leaves the column alone on re-enroll.
+		EKPub: req.GetEkPub(),
 	}
 	if t := req.GetCertExpiresAt(); t != nil {
 		expiry := t.AsTime()
