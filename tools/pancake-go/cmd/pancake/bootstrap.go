@@ -233,6 +233,28 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			CreateImage: r.GCE.CreateImage,
 			ImageFamily: r.GCE.ImageFamily,
 		}
+
+		// GCP+bucket mode: server uploads the EFI to GCS; no local
+		// artifacts unless the operator opted in explicitly via flag
+		// or recipe outputs:. CLI defaults are non-empty paths (handy
+		// for `pancake bootstrap` with no recipe at all), but in this
+		// mode those defaults are noise — clear them so the server
+		// doesn't even build (let alone stream) the rootfs disk,
+		// initramfs, bzimage, or local EFI.
+		if (platform == "gcp" || platform == "gce") && gceArgs.Bucket != "" {
+			if !flagSet["image"] && r.Outputs.Image == "" {
+				*image = ""
+			}
+			if !flagSet["initramfs"] && r.Outputs.Initramfs == "" {
+				*initramfsPath = ""
+			}
+			if !flagSet["bzimage-out"] && r.Outputs.BzImage == "" {
+				*bzimageOut = ""
+			}
+			if !flagSet["efi"] && r.Outputs.EFI == "" {
+				*efiOut = ""
+			}
+		}
 	}
 
 	// Sentinel kernel versions: "tree" / "local" mean "read it out of
