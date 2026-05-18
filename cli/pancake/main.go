@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
+	"github.com/sinkap/pancake/common/go/kit"
 )
 
 func usage() {
@@ -39,9 +39,10 @@ modify (in-VM only — operate on the running pancake-os):
                       daemon (separate binary, runs as a systemd unit)
                       consumes the sealed blob with --tpm-token=auto.
 
-orchestrator (build/admin host):
-  orchestrate get-current  ask a VM what manifest it's running
-  orchestrate push         push a signed manifest from a kit to a VM
+orchestrator (build/admin host — talk to an enrolled VM's pancaked over gRPC):
+  get-current              ask a VM what manifest it's running
+  push                     push a signed manifest from a kit to a VM
+  attest                   request + verify a fresh TPM attestation
   ca init / ca issue       mint a static CA + leaf certs (Slice 1, dev only)
   ca-server up/status/...  manage the step-ca container that issues TPM-
                            attested mTLS certs to enrolled VMs (Slice 2)
@@ -71,13 +72,13 @@ func main() {
 		return
 	}
 
-	// `bootstrap`, `build`, `orchestrate`, `attest`, `ca`, `ca-server`,
-	// `host-cert`, and `enroll` operate on free-standing paths (TPM +
-	// filesystem only), not on a pre-existing in-VM kit, so we don't
-	// pre-validate --kit for them.
+	// These subcommands operate on free-standing paths (TPM + filesystem
+	// only), not on a pre-existing in-VM kit, so we don't pre-validate
+	// --kit for them.
 	var k *kit.Kit
 	switch sub {
-	case "bootstrap", "build", "orchestrate", "attest", "ca", "ca-server", "host-cert", "enroll":
+	case "bootstrap", "build", "push", "get-current", "attest",
+		"ca", "ca-server", "host-cert", "enroll":
 		// nil kit; subcommand owns its own paths
 	default:
 		var err error
@@ -110,8 +111,10 @@ func main() {
 		rc = cmdBootstrap(k, args)
 	case "enroll":
 		rc = cmdEnroll(k, args)
-	case "orchestrate":
-		rc = cmdOrchestrate(k, args)
+	case "push":
+		rc = cmdPush(k, args)
+	case "get-current":
+		rc = cmdGetCurrent(k, args)
 	case "attest":
 		rc = cmdAttest(k, args)
 	case "ca":

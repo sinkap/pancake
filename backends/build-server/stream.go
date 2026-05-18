@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
+	"github.com/sinkap/pancake/common/gen/go/buildpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -32,7 +32,7 @@ const (
 // always send in full.
 func (s *Server) GetLayer(
 	req *buildpb.GetLayerRequest,
-	stream buildpb.PancakeBuilder_GetLayerServer,
+	stream buildpb.PancakeBuilderService_GetLayerServer,
 ) error {
 	dir := s.layerDir(req.Roothash)
 	if _, err := os.Stat(dir); err != nil {
@@ -77,7 +77,7 @@ func (s *Server) GetLayer(
 // chunks only for non-hole regions, each tagged with its file offset.
 // Client recreates sparseness via WriteAt + final Truncate.
 func streamSparseImage(
-	stream buildpb.PancakeBuilder_GetLayerServer,
+	stream buildpb.PancakeBuilderService_GetLayerServer,
 	part buildpb.LayerPart,
 	path string,
 	clientOffset, clientLength int64,
@@ -177,7 +177,7 @@ func layerPartPath(dir string, part buildpb.LayerPart) (string, bool) {
 }
 
 func streamFile(
-	stream buildpb.PancakeBuilder_GetLayerServer,
+	stream buildpb.PancakeBuilderService_GetLayerServer,
 	part buildpb.LayerPart,
 	path string,
 	offset, length int64,

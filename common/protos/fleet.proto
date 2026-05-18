@@ -14,11 +14,11 @@ syntax = "proto3";
 package pancake.fleet.v1;
 
 option go_package =
-    "github.com/sinkap/pancake/tools/pancake-go/internal/fleetpb";
+    "github.com/sinkap/pancake/common/gen/go/fleetpb";
 
 import "google/protobuf/timestamp.proto";
 
-service FleetManager {
+service PancakeFleetService {
   // Enroll registers a VM with the fleet. Called on first boot.
   // Idempotent: re-calling with the same name updates the existing row
   // (refreshes metadata, IP, certificate info).

@@ -30,9 +30,9 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetdb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/pkitls"
+	"github.com/sinkap/pancake/backends/fleet-server/internal/fleetdb"
+	"github.com/sinkap/pancake/common/gen/go/pancakepb"
+	"github.com/sinkap/pancake/common/go/pkitls"
 )
 
 // Config controls poller behavior.
@@ -189,14 +189,14 @@ func (p *Poller) AttestOne(ctx context.Context, vm fleetdb.VM) error {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
 	defer cc.Close()
-	cli := orchpb.NewPancakeClient(cc)
+	cli := pancakepb.NewPancakeAgentServiceClient(cc)
 
 	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
 		return err
 	}
 
-	resp, err := cli.Attest(dialCtx, &orchpb.AttestRequest{Nonce: nonce})
+	resp, err := cli.Attest(dialCtx, &pancakepb.AttestRequest{Nonce: nonce})
 	if err != nil {
 		p.recordFailure(ctx, vm.ID, fmt.Sprintf("attest rpc: %v", err))
 		return fmt.Errorf("attest rpc: %w", err)
@@ -352,7 +352,7 @@ func (p *Poller) verifyEKChain(ekCertDER []byte, chainDER [][]byte) (string, *bo
 }
 
 // pcrsToMap turns the PCR array from Attest into {"<index>": "<hex digest>"}.
-func pcrsToMap(pcrs []*orchpb.AttestResponse_PcrDigest) map[string]string {
+func pcrsToMap(pcrs []*pancakepb.AttestResponse_PcrDigest) map[string]string {
 	out := make(map[string]string, len(pcrs))
 	for _, p := range pcrs {
 		out[strconv.Itoa(int(p.Index))] = hex.EncodeToString(p.Sha256)

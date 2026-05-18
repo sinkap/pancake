@@ -73,14 +73,34 @@ type Recipe struct {
 	// server locally via the compose stack.
 	Builder string `yaml:"builder"`
 
-	Distro       Distro       `yaml:"distro"`
-	SSH          SSH          `yaml:"ssh"`
-	Kernel       Kernel       `yaml:"kernel"`
-	Outputs      Outputs      `yaml:"outputs"`
-	Orchestrator Orchestrator `yaml:"orchestrator"`
-	Attestation  Attestation  `yaml:"attestation"`
-	Issuance     Issuance     `yaml:"issuance"`
-	GCE          GCE          `yaml:"gce"`
+	Distro      Distro      `yaml:"distro"`
+	SSH         SSH         `yaml:"ssh"`
+	Kernel      Kernel      `yaml:"kernel"`
+	Outputs     Outputs     `yaml:"outputs"`
+	Attestation Attestation `yaml:"attestation"`
+	Issuance    Issuance    `yaml:"issuance"`
+	GCE         GCE         `yaml:"gce"`
+
+	// CAURL is the step-ca ACME endpoint the VM hits to enroll its
+	// TLS cert (e.g. https://10.0.2.2:8443/acme/tpm/directory). The
+	// build server bakes the trust root (read from its local trust
+	// volume, NOT from the recipe) into the signed verity layer at
+	// /etc/pancake/orch/ inside the running VM. Empty = no
+	// orch-config layer is built (unless other fields force it).
+	CAURL string `yaml:"ca-url"`
+
+	// AttestCAURL is the pancake-attest-ca base URL the VM hits to
+	// enroll its AK before the ACME order (e.g.
+	// https://10.0.2.2:8444). Both must be reachable from inside
+	// the VM at boot time. Legacy dual-CA mode; usually empty.
+	AttestCAURL string `yaml:"attest-ca-url"`
+
+	// FleetServer is the pancake-fleet-server gRPC address VMs
+	// auto-register with on first successful enroll
+	// (e.g. fleet.example.com:8081 or 10.0.2.2:8081 for QEMU dev).
+	// Empty = no auto-enrollment; operator must call
+	// PancakeFleetService.Enroll manually.
+	FleetServer string `yaml:"fleet-server"`
 }
 
 // Attestation configures how TPM attestation is performed.
@@ -111,7 +131,7 @@ type Issuance struct {
 	CA string `yaml:"ca"`
 
 	// StepCA configures the step-ca path (used when CA == "step-ca").
-	// Optional — Orchestrator.CAURL is used as a fallback for URL.
+	// Optional — the top-level CAURL is used as a fallback for URL.
 	StepCA StepCAIssuance `yaml:"step-ca"`
 
 	// CAS configures the Google CAS path (used when CA == "gcp-cas").
@@ -120,7 +140,7 @@ type Issuance struct {
 
 type StepCAIssuance struct {
 	// URL is the ACME directory URL of the step-ca. When empty,
-	// falls back to Orchestrator.CAURL for backward compatibility.
+	// falls back to the top-level CAURL.
 	URL string `yaml:"url"`
 }
 
@@ -129,34 +149,6 @@ type CASIssuance struct {
 	//   projects/<project>/locations/<region>/caPools/<pool>
 	// Required when Issuance.CA == "gcp-cas".
 	Pool string `yaml:"pool"`
-}
-
-// Orchestrator declares the single endpoint of the orchestrator
-// gateway. The build server expands this URL into the per-protocol
-// paths the VM uses (URL/acme/tpm/directory for ACME-tpm,
-// URL/attest-ca for AK enrollment), and bakes the trust root for
-// the gateway's TLS cert — read from the build server's local
-// trust volume, NOT from the recipe — into the signed verity layer
-// at /etc/pancake/orch/ inside the running VM. Empty URL = no
-// orch-config layer is built.
-type Orchestrator struct {
-	// CAURL is the step-ca ACME endpoint the VM hits to enroll its
-	// TLS cert (e.g. https://10.0.2.2:8443/acme/tpm/directory).
-	CAURL string `yaml:"ca-url"`
-	// AttestCAURL is the pancake-attest-ca base URL the VM hits to
-	// enroll its AK before the ACME order (e.g.
-	// https://10.0.2.2:8444). Both must be reachable from inside
-	// the VM at boot time.
-	//
-	// For QEMU/usernet that's typically https://10.0.2.2:<port>
-	// and the host forwards the docker-published ports.
-	AttestCAURL string `yaml:"attest-ca-url"`
-	// FleetServer is the pancake-fleet-server gRPC address VMs
-	// auto-register with on first successful enroll
-	// (e.g. fleet.example.com:8081 or 10.0.2.2:8081 for QEMU dev).
-	// Empty = no auto-enrollment; operator must call FleetManager.Enroll
-	// manually.
-	FleetServer string `yaml:"fleet-server"`
 }
 
 type Distro struct {
@@ -189,7 +181,7 @@ type Outputs struct {
 }
 
 // GCE holds Google Cloud-specific configuration (when platform: gce).
-// Fleet-server URL goes in Orchestrator.FleetServer; VM deployment
+// Fleet-server URL goes in the top-level FleetServer; VM deployment
 // settings (machine type, vTPM toggles) live in gcloud/terraform/the
 // instance template, not in the build recipe.
 type GCE struct {

@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/platform/gce"
+	"github.com/sinkap/pancake/common/go/platform/gce"
 )
 
 // uploadEFIToGCS converts the on-disk EFI image to tar.gz, uploads to

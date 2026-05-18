@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
+	"github.com/sinkap/pancake/common/gen/go/pancakepb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -31,8 +31,8 @@ import (
 // the raw 1184-byte SNP report. Verifier-side handles cert-chain
 // validation + signature verification; server stays small.
 func (s *server) AttestSEVSNP(
-	ctx context.Context, req *orchpb.AttestSEVSNPRequest,
-) (*orchpb.AttestSEVSNPResponse, error) {
+	ctx context.Context, req *pancakepb.AttestSEVSNPRequest,
+) (*pancakepb.AttestSEVSNPResponse, error) {
 	if _, err := os.Stat("/dev/sev-guest"); err != nil {
 		return nil, status.Error(codes.Unavailable,
 			"/dev/sev-guest absent — VM is not SEV-SNP")
@@ -61,7 +61,7 @@ func (s *server) AttestSEVSNP(
 	// trailing bytes as the (host-provided) VCEK chain when
 	// fetching from KDS isn't possible.
 	const reportSize = 0x4A0 // 1184 bytes per SEV-SNP ABI § 8.7
-	resp := &orchpb.AttestSEVSNPResponse{Report: rawQuote}
+	resp := &pancakepb.AttestSEVSNPResponse{Report: rawQuote}
 	if len(rawQuote) > reportSize {
 		resp.Report = rawQuote[:reportSize]
 		resp.VcekCert = rawQuote[reportSize:]

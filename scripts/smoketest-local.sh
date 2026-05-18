@@ -2,12 +2,14 @@
 # smoketest-local.sh — local dev-mode regression test for the bootstrap path.
 #
 # Run this before any commit that touches:
-#   cmd/pancake/, server/build_image.go, server/buildimage_handler.go,
-#   internal/layer/, internal/buildpb/, internal/initramfs/, initramfs/init
+#   cli/pancake/, backends/build-server/build_image.go,
+#   backends/build-server/buildimage_handler.go, common/go/layer/,
+#   common/protos/build.proto, common/go/initramfs/, tools/initramfs/init
 #
 # Prereqs:
-#   - docker compose + the local stack defined in tools/pancake-go/compose.yaml
-#   - pancake-recipe.yaml in the cwd (platform: dev, points at a kernel tree)
+#   - docker compose + the local stack defined in deployment/docker/compose.yaml
+#     (the repo-root compose.yaml shim brings it in too)
+#   - pancake-recipe.yaml at repo root (platform: dev, points at a kernel tree)
 #   - the kernel tree at recipe.kernel.bzimage exists locally
 #
 # What it does:
@@ -37,7 +39,7 @@ rm -f pancake-state.img pancake-efi.img pancake-initramfs.cpio.gz pancake-bzImag
 
 if [[ ! -x ./pancake ]]; then
   echo "[smoketest] building local pancake CLI"
-  go build -o ./pancake ./cmd/pancake
+  go build -o ./pancake ./cli/pancake
 fi
 
 echo "[smoketest] running bootstrap"

@@ -17,10 +17,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/deb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/layer"
+	"github.com/sinkap/pancake/common/gen/go/buildpb"
+	"github.com/sinkap/pancake/common/go/deb"
+	"github.com/sinkap/pancake/common/go/kit"
+	"github.com/sinkap/pancake/common/go/layer"
 )
 
 // bakeStaged turns a pre-populated staging directory into a cached

@@ -18,7 +18,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/common/go/runner"
 )
 
 // Defaults match the shell version. Pulling util-linux + mount + cryptsetup-bin
@@ -55,8 +55,8 @@ type Opts struct {
 	Force    bool     // rebuild stage even if dir exists (mmdebstrap is slow)
 
 	// SrcRoot (legacy / client path): when non-empty, the builder
-	// reads init from <SrcRoot>/initramfs/init and compiles
-	// mount-overlay.c from <SrcRoot>/initramfs/mount-overlay.c, and
+	// reads init from <SrcRoot>/tools/initramfs/init and compiles
+	// mount-overlay.c from <SrcRoot>/tools/initramfs/mount-overlay.c, and
 	// reads modules from /lib/modules/<KVer>. Phase 6 deletes this
 	// path; new callers should set the explicit fields below.
 	SrcRoot string
@@ -71,12 +71,12 @@ type Opts struct {
 
 	// InitSrcPath (preferred): path to the `/init` shell script
 	// that becomes the initramfs entrypoint. Empty falls back to
-	// SrcRoot/initramfs/init.
+	// SrcRoot/tools/initramfs/init.
 	InitSrcPath string
 
 	// MountOverlayBin (preferred): path to a pre-compiled
 	// mount-overlay binary. Empty falls back to compiling
-	// SrcRoot/initramfs/mount-overlay.c. Saves having to ship
+	// SrcRoot/tools/initramfs/mount-overlay.c. Saves having to ship
 	// gcc + libc-dev to the build server.
 	MountOverlayBin string
 
@@ -127,14 +127,14 @@ func Build(o Opts) error {
 	}
 
 	// Init script source: explicit InitSrcPath wins; otherwise
-	// SrcRoot/initramfs/init.
+	// SrcRoot/tools/initramfs/init.
 	initSrc := o.InitSrcPath
 	if initSrc == "" {
 		if o.SrcRoot == "" {
 			return fmt.Errorf("initramfs: InitSrcPath or SrcRoot required " +
 				"(need a path to the /init shell script)")
 		}
-		initSrc = filepath.Join(o.SrcRoot, "initramfs", "init")
+		initSrc = filepath.Join(o.SrcRoot, "tools", "initramfs", "init")
 	}
 	if _, err := os.Stat(initSrc); err != nil {
 		return fmt.Errorf("initramfs: %s missing", initSrc)
@@ -149,7 +149,7 @@ func Build(o Opts) error {
 				"required (need either a pre-compiled mount-overlay " +
 				"or its C source)")
 		}
-		moSrc = filepath.Join(o.SrcRoot, "initramfs", "mount-overlay.c")
+		moSrc = filepath.Join(o.SrcRoot, "tools", "initramfs", "mount-overlay.c")
 		if _, err := os.Stat(moSrc); err != nil {
 			return fmt.Errorf("initramfs: %s missing", moSrc)
 		}

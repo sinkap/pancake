@@ -20,9 +20,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/fleetpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/platform/gce"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmbackend"
+	"github.com/sinkap/pancake/common/gen/go/fleetpb"
+	"github.com/sinkap/pancake/common/go/platform/gce"
+	"github.com/sinkap/pancake/common/go/tpmbackend"
 )
 
 // defaultEKPubPath: where pancake enroll writes the TPM2B_PUBLIC blob.
@@ -100,7 +100,7 @@ func registerWithFleet(fleetServer string, certPEMPath string, backend tpmbacken
 		return
 	}
 	defer cc.Close()
-	cli := fleetpb.NewFleetManagerClient(cc)
+	cli := fleetpb.NewPancakeFleetServiceClient(cc)
 
 	// Read the EK public area; fleet server uses it as the TOFU
 	// trust anchor for later attestations. Best-effort: if /etc/pancake/

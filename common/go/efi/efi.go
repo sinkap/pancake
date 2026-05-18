@@ -38,8 +38,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
+	"github.com/sinkap/pancake/common/go/runner"
+	"github.com/sinkap/pancake/common/go/sign"
 )
 
 // UKIOpts: build a Unified Kernel Image.

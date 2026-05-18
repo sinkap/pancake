@@ -39,11 +39,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/issuance"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmbackend"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmkey"
+	"github.com/sinkap/pancake/common/go/issuance"
+	"github.com/sinkap/pancake/common/go/kit"
+	"github.com/sinkap/pancake/common/go/runner"
+	"github.com/sinkap/pancake/common/go/tpmbackend"
+	"github.com/sinkap/pancake/common/go/tpmkey"
 )
 
 const (

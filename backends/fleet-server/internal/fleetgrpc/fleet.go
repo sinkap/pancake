@@ -12,13 +12,13 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetdb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/fleetpb"
+	"github.com/sinkap/pancake/backends/fleet-server/internal/fleetdb"
+	"github.com/sinkap/pancake/common/gen/go/fleetpb"
 )
 
-// Server implements fleetpb.FleetManagerServer.
+// Server implements fleetpb.PancakeFleetServiceServer.
 type Server struct {
-	fleetpb.UnimplementedFleetManagerServer
+	fleetpb.UnimplementedPancakeFleetServiceServer
 	DB *fleetdb.DB
 }
 

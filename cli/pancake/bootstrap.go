@@ -9,12 +9,12 @@
 // stream artifacts back.
 //
 // "I want to build offline" → run the server locally via the
-// compose stack (tools/pancake-go/compose.yaml).
+// compose stack (deployment/docker/compose.yaml).
 //
 // Today the server-side endpoint that does the full assembly is
 // reachable as Server.AssembleImage; the BuildImage gRPC RPC that
-// wraps it lands once `protoc` regenerates internal/buildpb (see
-// tools/pancake-go/HACKING.md). Until that regen, the client still
+// wraps it lands once `protoc` regenerates common/gen/go/buildpb
+// (see docs/HACKING.md). Until that regen, the client still
 // post-processes layers locally — the pack* helpers in this file
 // stay around to support that interim.
 package main
@@ -28,9 +28,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/hoststate"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/recipe"
+	"github.com/sinkap/pancake/common/go/hoststate"
+	"github.com/sinkap/pancake/common/go/kit"
+	"github.com/sinkap/pancake/common/go/recipe"
 )
 
 // SystemBaseline is what mmdebstrap minbase doesn't pull but pancake-os
@@ -163,9 +163,9 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			efiOut, cmdline, builder)
 
 		// Auto-detect orchestrator URLs from environment if not in recipe
-		caURL := r.Orchestrator.CAURL
-		attestCAURL := r.Orchestrator.AttestCAURL
-		fleetServer := r.Orchestrator.FleetServer
+		caURL := r.CAURL
+		attestCAURL := r.AttestCAURL
+		fleetServer := r.FleetServer
 
 		if caURL == "" {
 			if paths, err := hoststate.Resolve(); err == nil {
@@ -209,7 +209,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 			}
 		}
 
-		// Step-ca URL precedence: Issuance.StepCA.URL > Orchestrator.CAURL > hoststate
+		// Step-ca URL precedence: Issuance.StepCA.URL > top-level CAURL > hoststate
 		stepCAURL := r.Issuance.StepCA.URL
 		if stepCAURL == "" {
 			stepCAURL = caURL
@@ -294,7 +294,7 @@ func cmdBootstrap(_ *kit.Kit, args []string) int {
 		return die(fmt.Errorf(
 			"--builder is required (or set `builder:` in the recipe). " +
 				"To build offline, run the build server locally — see " +
-				"tools/pancake-go/compose.yaml."))
+				"deployment/docker/compose.yaml."))
 	}
 
 	fmt.Fprintf(os.Stderr,
@@ -481,7 +481,9 @@ type GCEUploadArgs struct {
 	ImageFamily string // optional GCE image family (rolling-update)
 }
 
-// OrchArgs mirrors recipe.Orchestrator.
+// OrchArgs mirrors the recipe's orchestrator-side top-level fields
+// (CAURL, AttestCAURL, FleetServer) plus the platform/issuance bits
+// that govern how the orch-config layer is baked.
 //
 // Unified CA mode (recommended): CAURL only
 //   VMs get AK certs locally from dev EK CA

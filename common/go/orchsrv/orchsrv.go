@@ -1,5 +1,5 @@
 // Package orchsrv implements pancake's orchestrator-side gRPC service:
-// GetCurrentManifest + Update from internal/orchpb/pancake.proto.
+// GetCurrentManifest + Update from internal/pancakepb/pancake.proto.
 //
 // Used by the pancaked daemon (cmd/pancaked) and previously by the now-
 // removed `pancake serve` subcommand. Server logic, auto-rebuild path,
@@ -16,15 +16,15 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/deb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/layer"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/pkitls"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/sandbox"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
+	"github.com/sinkap/pancake/common/gen/go/buildpb"
+	"github.com/sinkap/pancake/common/go/deb"
+	"github.com/sinkap/pancake/common/go/kit"
+	"github.com/sinkap/pancake/common/go/layer"
+	"github.com/sinkap/pancake/common/gen/go/pancakepb"
+	"github.com/sinkap/pancake/common/go/pkitls"
+	"github.com/sinkap/pancake/common/go/runner"
+	"github.com/sinkap/pancake/common/go/sandbox"
+	"github.com/sinkap/pancake/common/go/sign"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -101,7 +101,7 @@ func Serve(o Opts) error {
 			return fmt.Errorf("dial builder %s: %w", o.Builder, err)
 		}
 		srv.builderAddr = o.Builder
-		srv.builderClient = buildpb.NewPancakeBuilderClient(cc)
+		srv.builderClient = buildpb.NewPancakeBuilderServiceClient(cc)
 		fmt.Fprintf(os.Stderr,
 			"[pancaked] build server: %s (auto-fetch missing layers on Update)\n",
 			o.Builder)
@@ -136,26 +136,26 @@ func Serve(o Opts) error {
 	}
 
 	g := grpc.NewServer(srvOpts...)
-	orchpb.RegisterPancakeServer(g, srv)
+	pancakepb.RegisterPancakeAgentServiceServer(g, srv)
 
 	fmt.Fprintf(os.Stderr,
 		"[pancaked] gRPC listening on %s (auth: %s)\n", o.Listen, authMode)
 	return g.Serve(lis)
 }
 
-// server is the orchpb.PancakeServer implementation.
+// server is the pancakepb.PancakeAgentServiceServer implementation.
 type server struct {
-	orchpb.UnimplementedPancakeServer
+	pancakepb.UnimplementedPancakeAgentServiceServer
 	k             *kit.Kit
 	pubkey        string
 	attest        *attestState // nil = no TPM, Attest RPC returns Unavailable
 	builderAddr   string
-	builderClient buildpb.PancakeBuilderClient // nil = no auto-fetch
+	builderClient buildpb.PancakeBuilderServiceClient // nil = no auto-fetch
 }
 
 // GetCurrentManifest returns whatever generation `current` points at.
 func (s *server) GetCurrentManifest(_ context.Context,
-	_ *orchpb.GetCurrentManifestRequest) (*orchpb.Manifest, error) {
+	_ *pancakepb.GetCurrentManifestRequest) (*pancakepb.Manifest, error) {
 	curID, err := s.k.CurrentID()
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
@@ -166,7 +166,7 @@ func (s *server) GetCurrentManifest(_ context.Context,
 // Update accepts a signed manifest, verifies it end-to-end, writes the
 // generation directory atomically. Does NOT flip current.
 func (s *server) Update(_ context.Context,
-	m *orchpb.Manifest) (*orchpb.UpdateResponse, error) {
+	m *pancakepb.Manifest) (*pancakepb.UpdateResponse, error) {
 	if len(m.ManifestToml) == 0 || len(m.ManifestSig) == 0 {
 		return nil, status.Error(codes.InvalidArgument,
 			"manifest_toml and manifest_sig are required")
@@ -194,7 +194,7 @@ func (s *server) Update(_ context.Context,
 
 	// 1. Signature.
 	if err := sign.VerifyManifest(mPath, sPath, s.pubkey); err != nil {
-		return &orchpb.UpdateResponse{Error: "signature: " + err.Error()},
+		return &pancakepb.UpdateResponse{Error: "signature: " + err.Error()},
 			status.Error(codes.PermissionDenied, err.Error())
 	}
 
@@ -210,14 +210,14 @@ func (s *server) Update(_ context.Context,
 	if gm.Generation.Counter <= maxCtr {
 		msg := fmt.Sprintf("counter %d not greater than local max %d",
 			gm.Generation.Counter, maxCtr)
-		return &orchpb.UpdateResponse{Error: msg},
+		return &pancakepb.UpdateResponse{Error: msg},
 			status.Error(codes.FailedPrecondition, msg)
 	}
 	newID := gm.Generation.ID
 	if _, err := os.Stat(filepath.Join(s.k.Generations(),
 		strconv.Itoa(newID))); err == nil {
 		msg := fmt.Sprintf("generation %d already exists locally", newID)
-		return &orchpb.UpdateResponse{Error: msg},
+		return &pancakepb.UpdateResponse{Error: msg},
 			status.Error(codes.AlreadyExists, msg)
 	}
 
@@ -254,7 +254,7 @@ func (s *server) Update(_ context.Context,
 				len(missingSlugs))
 			expected, err := parseLowersRoothashes(m.Lowers)
 			if err != nil {
-				return &orchpb.UpdateResponse{
+				return &pancakepb.UpdateResponse{
 						Error: "parse lowers: " + err.Error()},
 					status.Error(codes.InvalidArgument, err.Error())
 			}
@@ -270,7 +270,7 @@ func (s *server) Update(_ context.Context,
 				}
 			}
 			if err := buildMissingLayers(s.k, stillMissingRefs, expected); err != nil {
-				return &orchpb.UpdateResponse{
+				return &pancakepb.UpdateResponse{
 						MissingLayerSlugs: missingSlugs,
 						Error:             "auto-build: " + err.Error()},
 					status.Error(codes.FailedPrecondition, err.Error())
@@ -279,7 +279,7 @@ func (s *server) Update(_ context.Context,
 		}
 
 		if len(missingSlugs) > 0 {
-			return &orchpb.UpdateResponse{
+			return &pancakepb.UpdateResponse{
 					MissingLayerSlugs: missingSlugs,
 					Error:             "layers still missing after fetch + rebuild"},
 				status.Error(codes.Internal, "still missing")
@@ -315,7 +315,7 @@ func (s *server) Update(_ context.Context,
 	fmt.Fprintf(os.Stderr,
 		"[pancaked] installed generation %d (counter %d, %d layers)\n",
 		newID, gm.Generation.Counter, len(gm.Layer))
-	return &orchpb.UpdateResponse{InstalledGeneration: int32(newID)}, nil
+	return &pancakepb.UpdateResponse{InstalledGeneration: int32(newID)}, nil
 }
 
 // stillMissingSlugs returns the subset of layer slugs whose
@@ -334,7 +334,7 @@ func stillMissingSlugs(k *kit.Kit, layers []kit.LayerRef) []string {
 
 // readManifestFromKit reads the three sidecar files for genID into a
 // proto Manifest. Used by GetCurrentManifest.
-func readManifestFromKit(k *kit.Kit, genID int) (*orchpb.Manifest, error) {
+func readManifestFromKit(k *kit.Kit, genID int) (*pancakepb.Manifest, error) {
 	dir := filepath.Join(k.Generations(), strconv.Itoa(genID))
 	mt, err := os.ReadFile(filepath.Join(dir, "manifest.toml"))
 	if err != nil {
@@ -349,7 +349,7 @@ func readManifestFromKit(k *kit.Kit, genID int) (*orchpb.Manifest, error) {
 	if err != nil {
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
-	return &orchpb.Manifest{ManifestToml: mt, ManifestSig: ms, Lowers: lo}, nil
+	return &pancakepb.Manifest{ManifestToml: mt, ManifestSig: ms, Lowers: lo}, nil
 }
 
 // parseLowersRoothashes parses a lowers TSV (slug<TAB>image<TAB>hash<TAB>roothash)

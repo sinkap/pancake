@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmkey"
+	"github.com/sinkap/pancake/common/gen/go/pancakepb"
+	"github.com/sinkap/pancake/common/go/runner"
+	"github.com/sinkap/pancake/common/go/tpmkey"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -147,12 +147,12 @@ func setupAttest() (*attestState, error) {
 	return st, nil
 }
 
-// Attest implements orchpb.PancakeServer.Attest. Shells out to
+// Attest implements pancakepb.PancakeAgentServiceServer.Attest. Shells out to
 // tpm2_quote against the in-memory AK ctx, returns the quote
 // bytes + sig + AK/EK pubs + event log.
 func (s *server) Attest(
-	ctx context.Context, req *orchpb.AttestRequest,
-) (*orchpb.AttestResponse, error) {
+	ctx context.Context, req *pancakepb.AttestRequest,
+) (*pancakepb.AttestResponse, error) {
 	if s.attest == nil {
 		return nil, status.Error(codes.Unavailable,
 			"no TPM on this host; attestation disabled")
@@ -223,7 +223,7 @@ func (s *server) Attest(
 		eventLog = b
 	}
 
-	resp := &orchpb.AttestResponse{
+	resp := &pancakepb.AttestResponse{
 		Quote:     quote,
 		Signature: sig,
 		AkPub:     s.attest.akPub,
@@ -297,8 +297,8 @@ func loadEKChainFiles(certPath, chainPath string) (ekCertDER []byte, chainDERs [
 // hierarchy auth — we set that up here and tear it down on every
 // call (no persistent session state).
 func (s *server) ActivateCredential(
-	ctx context.Context, req *orchpb.ActivateCredentialRequest,
-) (*orchpb.ActivateCredentialResponse, error) {
+	ctx context.Context, req *pancakepb.ActivateCredentialRequest,
+) (*pancakepb.ActivateCredentialResponse, error) {
 	if s.attest == nil {
 		return nil, status.Error(codes.Unavailable, "no TPM on this host")
 	}
@@ -355,7 +355,7 @@ func (s *server) ActivateCredential(
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "read secret: %v", err)
 	}
-	return &orchpb.ActivateCredentialResponse{Secret: secret}, nil
+	return &pancakepb.ActivateCredentialResponse{Secret: secret}, nil
 }
 
 func pcrSelectionString(pcrs []int32) string {
@@ -368,7 +368,7 @@ func pcrSelectionString(pcrs []int32) string {
 
 // readPCRs returns per-PCR sha256 digests in the same order as
 // requested. Calls tpm2_pcrread once and parses its output.
-func readPCRs(pcrs []int32) ([]*orchpb.AttestResponse_PcrDigest, error) {
+func readPCRs(pcrs []int32) ([]*pancakepb.AttestResponse_PcrDigest, error) {
 	if len(pcrs) == 0 {
 		return nil, nil
 	}
@@ -405,9 +405,9 @@ func readPCRs(pcrs []int32) ([]*orchpb.AttestResponse_PcrDigest, error) {
 		}
 		digestByIdx[int32(idx)] = b
 	}
-	out2 := make([]*orchpb.AttestResponse_PcrDigest, 0, len(pcrs))
+	out2 := make([]*pancakepb.AttestResponse_PcrDigest, 0, len(pcrs))
 	for _, p := range pcrs {
-		out2 = append(out2, &orchpb.AttestResponse_PcrDigest{
+		out2 = append(out2, &pancakepb.AttestResponse_PcrDigest{
 			Index:  p,
 			Sha256: digestByIdx[p],
 		})

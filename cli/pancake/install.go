@@ -16,11 +16,11 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/deb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/layer"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/sandbox"
+	"github.com/sinkap/pancake/common/go/deb"
+	"github.com/sinkap/pancake/common/go/kit"
+	"github.com/sinkap/pancake/common/go/layer"
+	"github.com/sinkap/pancake/common/go/runner"
+	"github.com/sinkap/pancake/common/go/sandbox"
 )
 
 func cmdInstall(k *kit.Kit, args []string) int {
@@ -57,7 +57,7 @@ func cmdInstall(k *kit.Kit, args []string) int {
 	}
 
 	mountOverlay, err := sandbox.FindHelper("mount-overlay",
-		repoRoot(), "initramfs")
+		repoRoot(), "tools/initramfs")
 	if err != nil {
 		return die(err)
 	}
@@ -278,18 +278,22 @@ func csv(xs []string) string {
 // Returns "" if it can't figure it out, which makes FindHelper rely on
 // the /sbin search only.
 func repoRoot() string {
-	// argv[0] of `pancake` is typically /usr/local/bin/pancake (in the kit)
-	// or .../pancake-go/bin/pancake (in dev). For the latter, the helper
-	// .c sources live two dirs up.
+	// argv[0] of `pancake` is typically /usr/local/bin/pancake (in the
+	// kit), .../pancake (direct dev-tree run), or .../bin/pancake
+	// (cached dev build).
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
 	}
-	// .../tools/pancake-go/bin/pancake → .../
 	dir := filepath.Dir(exe)
+	// .../bin/pancake → repo root is the parent of bin/
 	if filepath.Base(dir) == "bin" {
-		// .../tools/pancake-go/bin
-		return filepath.Dir(filepath.Dir(filepath.Dir(dir)))
+		return filepath.Dir(dir)
+	}
+	// .../pancake at repo root: dir IS the repo root iff it contains
+	// the tools/initramfs/ helpers subtree.
+	if _, err := os.Stat(filepath.Join(dir, "tools", "initramfs")); err == nil {
+		return dir
 	}
 	return ""
 }

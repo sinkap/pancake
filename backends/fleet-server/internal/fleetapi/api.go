@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/attestpoll"
-	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetdb"
+	"github.com/sinkap/pancake/backends/fleet-server/internal/attestpoll"
+	"github.com/sinkap/pancake/backends/fleet-server/internal/fleetdb"
 )
 
 // API holds shared dependencies for HTTP handlers.

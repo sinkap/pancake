@@ -4,7 +4,7 @@
 // Operators (or background workers) call list/attest RPCs to inspect
 // + verify the fleet.
 //
-// Pancaked on each VM already exposes the Attest RPC (see pancakepb).
+// Pancaked on each VM already exposes the Attest RPC (see orchpb).
 // The fleet server is the orchestrator-side aggregator: it discovers
 // VMs (auto-registered via Enroll), polls them for attestations,
 // stores results in PostgreSQL, and surfaces the data via the web UI.

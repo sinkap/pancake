@@ -17,9 +17,9 @@ syntax = "proto3";
 
 package pancake.v1;
 
-option go_package = "github.com/sinkap/pancake/tools/pancake-go/internal/orchpb";
+option go_package = "github.com/sinkap/pancake/common/gen/go/pancakepb";
 
-service Pancake {
+service PancakeAgentService {
   // GetCurrentManifest returns the manifest of the generation that
   // `current` symlinks to (i.e., what the VM is "supposed to be on";
   // not necessarily what it's actively running, since `pancake swap`

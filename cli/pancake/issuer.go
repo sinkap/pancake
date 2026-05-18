@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/issuance"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/issuance/gcpcas"
+	"github.com/sinkap/pancake/common/go/issuance"
+	"github.com/sinkap/pancake/common/go/issuance/gcpcas"
 )
 
 // pickIssuer returns the Issuer the enroll command should use based on

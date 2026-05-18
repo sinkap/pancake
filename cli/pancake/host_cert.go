@@ -22,8 +22,8 @@ import (
 	"go.step.sm/crypto/jose"
 	"go.step.sm/crypto/pemutil"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/hoststate"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
+	"github.com/sinkap/pancake/common/go/hoststate"
+	"github.com/sinkap/pancake/common/go/kit"
 )
 
 func cmdHostCert(_ *kit.Kit, args []string) int {

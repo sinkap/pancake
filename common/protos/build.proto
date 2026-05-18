@@ -56,7 +56,7 @@ syntax = "proto3";
 package pancake.build.v1;
 
 option go_package =
-    "github.com/sinkap/pancake/tools/pancake-go/internal/buildpb";
+    "github.com/sinkap/pancake/common/gen/go/buildpb";
 
 import "google/protobuf/timestamp.proto";
 
@@ -64,7 +64,7 @@ import "google/protobuf/timestamp.proto";
 // Service
 // ============================================================================
 
-service PancakeBuilder {
+service PancakeBuilderService {
   // BuildLayer returns the canonical artifact for `spec`, building it
   // on demand if not cached. Idempotent. Synchronous: large package
   // sets can take seconds (apt fetch + mkfs.ext4 + veritysetup); use

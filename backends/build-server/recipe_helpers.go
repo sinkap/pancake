@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/common/gen/go/buildpb"
+	"github.com/sinkap/pancake/common/go/runner"
 )
 
 // overlayPriority assigns each known synthetic layer a slot in the

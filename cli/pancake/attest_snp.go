@@ -28,7 +28,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
+	"github.com/sinkap/pancake/common/gen/go/pancakepb"
 
 	"github.com/google/go-sev-guest/abi"
 	"github.com/google/go-sev-guest/kds"
@@ -39,12 +39,12 @@ import (
 
 func attestSNPCheck(
 	ctx context.Context,
-	cli orchpb.PancakeClient,
+	cli pancakepb.PancakeAgentServiceClient,
 	nonce []byte,
 	expectMeasurementHex string,
 ) error {
 	resp, err := cli.AttestSEVSNP(ctx,
-		&orchpb.AttestSEVSNPRequest{Nonce: nonce})
+		&pancakepb.AttestSEVSNPRequest{Nonce: nonce})
 	if err != nil {
 		return fmt.Errorf("AttestSEVSNP: %w", err)
 	}

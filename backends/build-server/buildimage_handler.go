@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
+	"github.com/sinkap/pancake/common/gen/go/buildpb"
 )
 
 // BuildImage is the gRPC handler that exposes AssembleImage on the
@@ -19,7 +19,7 @@ import (
 // bytes as []byte.
 func (s *Server) BuildImage(
 	req *buildpb.BuildImageRequest,
-	stream buildpb.PancakeBuilder_BuildImageServer,
+	stream buildpb.PancakeBuilderService_BuildImageServer,
 ) error {
 	// Translate the optional GCSUpload field.
 	var gcs *GCSUploadOpts
@@ -109,7 +109,7 @@ func (s *Server) BuildImage(
 // the final frame Last=true. Holding 1 MiB per frame gives gRPC
 // some headroom under its default 4 MiB per-message limit.
 func streamArtifact(
-	stream buildpb.PancakeBuilder_BuildImageServer,
+	stream buildpb.PancakeBuilderService_BuildImageServer,
 	kind buildpb.BuildImageChunk_Artifact, payload []byte,
 ) error {
 	const chunkSize = 1 << 20 // 1 MiB

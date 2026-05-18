@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetdb"
+	"github.com/sinkap/pancake/backends/fleet-server/internal/fleetdb"
 )
 
 // vmJSON is the wire format for VMs in the REST API.

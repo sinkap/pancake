@@ -29,9 +29,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/platform/gce"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/common/gen/go/buildpb"
+	"github.com/sinkap/pancake/common/go/platform/gce"
+	"github.com/sinkap/pancake/common/go/runner"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -109,7 +109,7 @@ func bootstrapViaBuilder(a bootstrapArgs) error {
 		return fmt.Errorf("dial builder: %w", err)
 	}
 	defer cc.Close()
-	cli := buildpb.NewPancakeBuilderClient(cc)
+	cli := buildpb.NewPancakeBuilderServiceClient(cc)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 

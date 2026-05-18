@@ -2,7 +2,7 @@
 // signed manifests and applies them to the local kit.
 //
 // Implements the pancake.v1.Pancake service from
-// internal/orchpb/pancake.proto via internal/orchsrv. Runs as a systemd
+// internal/pancakepb/pancake.proto via internal/orchsrv. Runs as a systemd
 // unit (etc/systemd/system/pancaked.service in the pancaked layer); not
 // meant to be invoked manually except for ad-hoc debugging.
 //
@@ -31,8 +31,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/orchsrv"
+	"github.com/sinkap/pancake/common/go/kit"
+	"github.com/sinkap/pancake/common/go/orchsrv"
 )
 
 const (

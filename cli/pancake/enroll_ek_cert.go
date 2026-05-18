@@ -16,7 +16,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmbackend"
+	"github.com/sinkap/pancake/common/go/tpmbackend"
 )
 
 const (
@@ -70,7 +70,7 @@ func writeEKCert(ctx context.Context, backend tpmbackend.Backend, certPath, chai
 }
 
 // readEKCertChainFromDisk loads the EK cert + intermediates back as
-// DER blobs suitable for orchpb.AttestResponse. Returns (nil, nil)
+// DER blobs suitable for pancakepb.AttestResponse. Returns (nil, nil)
 // when the files don't exist so the Attest RPC handler can omit the
 // optional fields.
 func readEKCertChainFromDisk(certPath, chainPath string) (ekCertDER []byte, chainDERs [][]byte, err error) {

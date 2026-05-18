@@ -25,8 +25,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/pkitls"
+	"github.com/sinkap/pancake/common/go/kit"
+	"github.com/sinkap/pancake/common/go/pkitls"
 )
 
 func cmdCA(_ *kit.Kit, args []string) int {

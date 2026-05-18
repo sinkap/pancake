@@ -10,7 +10,7 @@ import (
 	compute "cloud.google.com/go/compute/apiv1"
 	computepb "cloud.google.com/go/compute/apiv1/computepb"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/platform/gce"
+	"github.com/sinkap/pancake/common/go/platform/gce"
 )
 
 // GCEVTPMBackend is the Google Cloud virtual TPM 2.0 backend.

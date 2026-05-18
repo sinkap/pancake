@@ -19,7 +19,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/fleetpb"
+	"github.com/sinkap/pancake/common/gen/go/fleetpb"
 )
 
 func main() {
@@ -35,7 +35,7 @@ func main() {
 		log.Fatalf("dial: %v", err)
 	}
 	defer conn.Close()
-	cli := fleetpb.NewFleetManagerClient(conn)
+	cli := fleetpb.NewPancakeFleetServiceClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

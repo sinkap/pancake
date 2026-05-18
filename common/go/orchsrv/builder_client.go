@@ -20,8 +20,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
+	"github.com/sinkap/pancake/common/gen/go/buildpb"
+	"github.com/sinkap/pancake/common/go/kit"
 )
 
 // fetchLayersFromBuilder pulls every requested layer from the build
@@ -74,7 +74,7 @@ func (s *server) fetchLayersFromBuilder(
 // internal/builderclient package once a third caller appears.
 func pullLayerStream(
 	ctx context.Context,
-	cli buildpb.PancakeBuilderClient,
+	cli buildpb.PancakeBuilderServiceClient,
 	roothash string,
 	dest string,
 ) error {

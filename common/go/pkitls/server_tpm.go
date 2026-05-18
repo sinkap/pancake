@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmkey"
+	"github.com/sinkap/pancake/common/go/tpmkey"
 )
 
 // LoadServerConfigTPM reads the cert chain from certFile (PEM) and

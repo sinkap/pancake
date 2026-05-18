@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetdb"
+	"github.com/sinkap/pancake/backends/fleet-server/internal/fleetdb"
 )
 
 type generationJSON struct {

@@ -21,7 +21,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/common/go/runner"
 )
 
 var roothashRe = regexp.MustCompile(`Root hash:\s+([0-9a-f]+)`)

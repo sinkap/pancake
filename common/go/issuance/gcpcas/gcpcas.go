@@ -36,8 +36,8 @@ import (
 	tpmstorage "go.step.sm/crypto/tpm/storage"
 	"google.golang.org/protobuf/types/known/durationpb"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/issuance"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/tpmkey"
+	"github.com/sinkap/pancake/common/go/issuance"
+	"github.com/sinkap/pancake/common/go/tpmkey"
 )
 
 // Issuer mints VM TLS certs from a Google CAS pool.

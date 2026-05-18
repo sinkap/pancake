@@ -21,16 +21,14 @@ func TestParseModes(t *testing.T) {
 		"dev defaults": {
 			body: `output: ./kit
 platform: dev
-orchestrator:
-  ca-url: https://127.0.0.1:8443/acme/tpm/directory
+ca-url: https://127.0.0.1:8443/acme/tpm/directory
 `,
 			wantPlatform: "dev",
 		},
 		"gcp full": {
 			body: `output: ./kit
 platform: gcp
-orchestrator:
-  ca-url: https://unused.example.com/acme/tpm/directory
+ca-url: https://unused.example.com/acme/tpm/directory
 attestation:
   ek-trust: google-vtpm
 issuance:
@@ -46,8 +44,7 @@ issuance:
 		"self-hosted hardware": {
 			body: `output: ./kit
 platform: self-hosted
-orchestrator:
-  ca-url: https://prod-ca.example.com:8443/acme/tpm/directory
+ca-url: https://prod-ca.example.com:8443/acme/tpm/directory
 attestation:
   ek-trust: manufacturer
 issuance:

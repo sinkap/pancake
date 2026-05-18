@@ -8,14 +8,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
+	"github.com/sinkap/pancake/common/gen/go/buildpb"
 )
 
 // UploadBlob streams arbitrary bytes (kernel bzImage, modules tarball,
 // pancake binary, SSH key, even a tiny string like a hostname) and
 // returns its sha256. Cached at <cacheDir>/blobs/<sha256>; re-uploads
 // of the same content are idempotent (no-op write).
-func (s *Server) UploadBlob(stream buildpb.PancakeBuilder_UploadBlobServer) error {
+func (s *Server) UploadBlob(stream buildpb.PancakeBuilderService_UploadBlobServer) error {
 	tmp, err := os.CreateTemp(filepath.Join(s.cacheDir, "work"), "blob-*")
 	if err != nil {
 		return fmt.Errorf("blob: tmpfile: %w", err)

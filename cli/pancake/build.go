@@ -25,10 +25,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/deb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/layer"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/common/go/deb"
+	"github.com/sinkap/pancake/common/go/kit"
+	"github.com/sinkap/pancake/common/go/layer"
+	"github.com/sinkap/pancake/common/go/runner"
 )
 
 // overlayInstall mounts overlay(lower, upper, work) at merged, bind-mounts

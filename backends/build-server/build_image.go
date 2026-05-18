@@ -30,13 +30,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/deb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/efi"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/initramfs"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/pack"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
+	"github.com/sinkap/pancake/common/gen/go/buildpb"
+	"github.com/sinkap/pancake/common/go/deb"
+	"github.com/sinkap/pancake/common/go/efi"
+	"github.com/sinkap/pancake/common/go/initramfs"
+	"github.com/sinkap/pancake/common/go/pack"
+	"github.com/sinkap/pancake/common/go/runner"
+	"github.com/sinkap/pancake/common/go/sign"
 )
 
 // AssembleImageRequest mirrors BuildImageRequest in build.proto. It

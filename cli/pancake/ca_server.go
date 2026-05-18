@@ -28,8 +28,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
+	"github.com/sinkap/pancake/common/go/kit"
+	"github.com/sinkap/pancake/common/go/runner"
 )
 
 // Defaults match the Dockerfile's published port and ENV.
@@ -39,7 +39,7 @@ const (
 	defaultCAVolume       = "pancake-ca-state"
 	defaultCAPort         = 8443
 	defaultCAProvisioner  = "tpm"
-	defaultCAImageContext = "tools/pancake-go/ca-server"
+	defaultCAImageContext = "deployment/docker/ca-server"
 )
 
 func cmdCAServer(_ *kit.Kit, args []string) int {

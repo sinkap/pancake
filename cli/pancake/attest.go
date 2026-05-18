@@ -33,11 +33,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/hoststate"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/kit"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/orchpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/runner"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/pkitls"
+	"github.com/sinkap/pancake/common/go/hoststate"
+	"github.com/sinkap/pancake/common/go/kit"
+	"github.com/sinkap/pancake/common/gen/go/pancakepb"
+	"github.com/sinkap/pancake/common/go/runner"
+	"github.com/sinkap/pancake/common/go/pkitls"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -124,7 +124,7 @@ func cmdAttest(_ *kit.Kit, args []string) int {
 		return die(fmt.Errorf("dial %s: %w", *target, err))
 	}
 	defer cc.Close()
-	cli := orchpb.NewPancakeClient(cc)
+	cli := pancakepb.NewPancakeAgentServiceClient(cc)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -159,7 +159,7 @@ func cmdAttest(_ *kit.Kit, args []string) int {
 	}
 
 	// TPM path (default).
-	resp, err := cli.Attest(ctx, &orchpb.AttestRequest{Nonce: nonce})
+	resp, err := cli.Attest(ctx, &pancakepb.AttestRequest{Nonce: nonce})
 	if err != nil {
 		return die(fmt.Errorf("Attest: %w", err))
 	}
@@ -351,8 +351,8 @@ func cmdAttest(_ *kit.Kit, args []string) int {
 // Returns error if any step fails or the secret round-trip mismatches.
 func credentialActivationCheck(
 	ctx context.Context,
-	cli orchpb.PancakeClient,
-	resp *orchpb.AttestResponse,
+	cli pancakepb.PancakeAgentServiceClient,
+	resp *pancakepb.AttestResponse,
 ) error {
 	if len(resp.AkName) == 0 || len(resp.EkPub) == 0 {
 		return fmt.Errorf("response missing ak_name or ek_pub")
@@ -400,7 +400,7 @@ func credentialActivationCheck(
 		return err
 	}
 
-	got, err := cli.ActivateCredential(ctx, &orchpb.ActivateCredentialRequest{
+	got, err := cli.ActivateCredential(ctx, &pancakepb.ActivateCredentialRequest{
 		Blob: blob,
 	})
 	if err != nil {

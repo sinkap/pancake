@@ -22,12 +22,12 @@ import (
 
 	"google.golang.org/grpc"
 
-	fleetserver "github.com/sinkap/pancake/tools/pancake-go/fleet-server"
-	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/attestpoll"
-	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetapi"
-	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetdb"
-	"github.com/sinkap/pancake/tools/pancake-go/fleet-server/internal/fleetgrpc"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/fleetpb"
+	fleetserver "github.com/sinkap/pancake/backends/fleet-server"
+	"github.com/sinkap/pancake/backends/fleet-server/internal/attestpoll"
+	"github.com/sinkap/pancake/backends/fleet-server/internal/fleetapi"
+	"github.com/sinkap/pancake/backends/fleet-server/internal/fleetdb"
+	"github.com/sinkap/pancake/backends/fleet-server/internal/fleetgrpc"
+	"github.com/sinkap/pancake/common/gen/go/fleetpb"
 )
 
 func main() {
@@ -144,7 +144,7 @@ func main() {
 
 	// gRPC server
 	grpcSrv := grpc.NewServer()
-	fleetpb.RegisterFleetManagerServer(grpcSrv, fleetgrpc.New(db))
+	fleetpb.RegisterPancakeFleetServiceServer(grpcSrv, fleetgrpc.New(db))
 
 	// Listen
 	grpcLn, err := net.Listen("tcp", *grpcAddr)

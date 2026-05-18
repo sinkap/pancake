@@ -19,12 +19,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sinkap/pancake/tools/pancake-go/internal/buildpb"
-	"github.com/sinkap/pancake/tools/pancake-go/internal/sign"
+	"github.com/sinkap/pancake/common/gen/go/buildpb"
+	"github.com/sinkap/pancake/common/go/sign"
 )
 
 type Server struct {
-	buildpb.UnimplementedPancakeBuilderServer
+	buildpb.UnimplementedPancakeBuilderServiceServer
 	cacheDir       string
 	trustDir       string
 	bundledBinsDir string
