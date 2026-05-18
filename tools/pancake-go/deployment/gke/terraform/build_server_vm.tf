@@ -34,8 +34,11 @@ resource "google_project_iam_member" "build_storage_object_admin" {
 
 resource "google_project_iam_member" "build_compute_image_admin" {
   # Optional: bootstrap can create GCE images directly after upload.
+  # roles/compute.storageAdmin grants full control of images, disks,
+  # and snapshots; the narrower roles/compute.imageUser is read-only,
+  # and there is no roles/compute.imageAdmin (despite the obvious name).
   project = var.project_id
-  role    = "roles/compute.imageAdmin"
+  role    = "roles/compute.storageAdmin"
   member  = "serviceAccount:${google_service_account.pancake_build.email}"
 }
 
