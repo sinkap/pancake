@@ -44,12 +44,18 @@ var SystemBaseline = []string{
 	"dbus",
 	"iproute2", "iputils-ping",
 	"netbase",
-	// ca-certificates intentionally NOT in baseline: nothing in
-	// pancake-os validates TLS against the public CA store. Trust
-	// model is the kit's own signing key (baked at
-	// /etc/pancake/manifest.pubkey), TPM-sealed bearer tokens for
-	// orchestrator auth, and authorized_keys for SSH. Re-add only
-	// when a future feature needs to verify a public TLS endpoint.
+	// ca-certificates: Go's TLS layer in pancake enroll needs this to
+	// validate Google CAS / step-ca / fleet-server certs. Originally
+	// excluded under a "no public CA trust" mantra, but once the
+	// GCP issuance path exists (POSTs to privateca.googleapis.com)
+	// it is mandatory. Cheap (~300 KB).
+	"ca-certificates",
+	// systemd-resolved + systemd-networkd give us a working DNS
+	// resolver and DHCP client. systemd-networkd ships with
+	// systemd-sysv but isn't enabled by default; the pancake-host
+	// recipe enables both (etc/systemd/system/multi-user.target.wants
+	// symlinks).
+	"systemd-resolved",
 	"kmod",
 	"cryptsetup-bin", "dmsetup",
 	"openssh-client",

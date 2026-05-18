@@ -582,13 +582,50 @@ func (s *Server) bakePancakeHost(
 		[]byte(sshdConf), 0o644); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(staging, "etc/resolv.conf"),
-		[]byte("nameserver 10.0.2.3\n"), 0o644); err != nil {
-		return nil, err
-	}
+
+	// Network + DNS. The old code wrote /etc/resolv.conf with a
+	// hardcoded nameserver 10.0.2.3 (QEMU SLIRP's DNS), which
+	// (a) was wrong on every non-QEMU platform and
+	// (b) blocked dynamic DNS discovery on platforms like GCE where
+	//     the DNS server is delivered by DHCP/metadata.
+	// Replace with: a stub-resolv symlink to systemd-resolved's
+	// per-interface resolver, plus enable both systemd-networkd
+	// (DHCP) and systemd-resolved (resolves names against whatever
+	// nameservers networkd discovered). DHCP works on QEMU SLIRP
+	// (10.0.2.2 hands out 10.0.2.3 as DNS) AND on GCE (metadata
+	// hands out 169.254.169.254 + the project's private zones).
 	if err := os.WriteFile(filepath.Join(staging,
 		"etc/systemd/network/10-wired.network"),
 		[]byte(networkdWired), 0o644); err != nil {
+		return nil, err
+	}
+	// /etc/resolv.conf → /run/systemd/resolve/stub-resolv.conf
+	// systemd-resolved manages the target file at runtime.
+	if err := os.MkdirAll(filepath.Join(staging, "etc"), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.Symlink("/run/systemd/resolve/stub-resolv.conf",
+		filepath.Join(staging, "etc/resolv.conf")); err != nil {
+		return nil, err
+	}
+	// Enable systemd-networkd + systemd-resolved at boot.
+	wantsDir := filepath.Join(staging, "etc/systemd/system/multi-user.target.wants")
+	if err := os.MkdirAll(wantsDir, 0o755); err != nil {
+		return nil, err
+	}
+	for _, svc := range []string{"systemd-networkd.service", "systemd-resolved.service"} {
+		if err := os.Symlink("/lib/systemd/system/"+svc,
+			filepath.Join(wantsDir, svc)); err != nil {
+			return nil, err
+		}
+	}
+	// systemd-networkd also wants its socket pre-enabled.
+	socketsDir := filepath.Join(staging, "etc/systemd/system/sockets.target.wants")
+	if err := os.MkdirAll(socketsDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.Symlink("/lib/systemd/system/systemd-networkd.socket",
+		filepath.Join(socketsDir, "systemd-networkd.socket")); err != nil {
 		return nil, err
 	}
 
