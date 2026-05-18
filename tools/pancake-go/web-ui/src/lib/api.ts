@@ -5,7 +5,9 @@ import type {
 	VMListResponse,
 	AttestationListResponse,
 	FleetStats,
-	EventListResponse
+	EventListResponse,
+	Generation,
+	GenerationListResponse
 } from './types';
 
 const BASE = '/api/v1';
@@ -56,6 +58,18 @@ export const api = {
 	attestVM(id: number) {
 		return getJSON<{ status: string; message: string }>(`/vms/${id}/attest`, {
 			method: 'POST'
+		});
+	},
+
+	listGenerations() {
+		return getJSON<GenerationListResponse>('/generations');
+	},
+
+	putGeneration(gen: number, pcrs: Record<string, string>, description = '') {
+		return getJSON<Generation>(`/generations/${gen}`, {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ pcrs, description })
 		});
 	}
 };

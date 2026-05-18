@@ -57,6 +57,10 @@ func main() {
 		"path to the SvelteKit build/ directory; if set, served at / "+
 			"(typically web-ui/build after `npm run build`)")
 
+	tofu := flag.Bool("attest-tofu", false,
+		"trust-on-first-use: auto-register expected PCRs from the first "+
+			"valid attestation for each new generation")
+
 	flag.Parse()
 
 	if *dsn == "" {
@@ -95,6 +99,7 @@ func main() {
 			CertFile:           *pollCert,
 			KeyFile:            *pollKey,
 			ServerNameOverride: *pollServerName,
+			TOFU:               *tofu,
 		})
 		if err != nil {
 			log.Fatalf("init attest poller: %v", err)

@@ -45,6 +45,11 @@ func (a *API) Routes() *http.ServeMux {
 	// Events / transparency log
 	mux.HandleFunc("GET /api/v1/events", a.listEvents)
 
+	// Generations (PCR policies)
+	mux.HandleFunc("GET /api/v1/generations", a.listGenerations)
+	mux.HandleFunc("GET /api/v1/generations/{id}", a.getGeneration)
+	mux.HandleFunc("PUT /api/v1/generations/{id}", a.putGeneration)
+
 	// SvelteKit SPA: serve from WebUI dir if configured. Fallback to
 	// index.html for SPA routes (so /vms/42 served as index.html and
 	// the client router takes over).

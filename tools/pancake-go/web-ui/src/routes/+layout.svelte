@@ -8,6 +8,7 @@
 		{ href: '/', label: 'Dashboard' },
 		{ href: '/vms', label: 'VMs' },
 		{ href: '/attestations', label: 'Attestations' },
+		{ href: '/generations', label: 'Generations' },
 		{ href: '/transparency', label: 'Transparency Log' }
 	];
 

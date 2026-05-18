@@ -17,10 +17,13 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -52,6 +55,12 @@ type Config struct {
 	// Empty = derive from VM.Name (the hostname-shaped value the cert
 	// SAN is signed for).
 	ServerNameOverride string
+
+	// TOFU: if true, the first valid attestation for a generation that
+	// has no registered expected_pcrs auto-registers them. Subsequent
+	// attestations for that generation must match. Off by default;
+	// production should pre-register policies via the API.
+	TOFU bool
 }
 
 func (c *Config) applyDefaults() {
@@ -185,7 +194,7 @@ func (p *Poller) AttestOne(ctx context.Context, vm fleetdb.VM) error {
 		return fmt.Errorf("attest rpc: %w", err)
 	}
 
-	// Basic verification: non-empty quote/sig/ak_pub + at least one PCR.
+	// Basic transport-level checks
 	status := "valid"
 	verifErr := ""
 	if len(resp.Quote) == 0 || len(resp.Signature) == 0 || len(resp.AkPub) == 0 {
@@ -196,7 +205,16 @@ func (p *Poller) AttestOne(ctx context.Context, vm fleetdb.VM) error {
 		verifErr = "no PCRs returned"
 	}
 
-	pcrJSON, _ := json.Marshal(pcrsToMap(resp.Pcr))
+	pcrMap := pcrsToMap(resp.Pcr)
+	pcrJSON, _ := json.Marshal(pcrMap)
+
+	// PCR policy check (only run if transport checks passed)
+	if status == "valid" && vm.CurrentGeneration > 0 {
+		if policyStatus, policyErr := p.checkPolicy(ctx, vm.CurrentGeneration, pcrMap); policyStatus != "" {
+			status = policyStatus
+			verifErr = policyErr
+		}
+	}
 
 	_, err = p.DB.InsertAttestation(ctx, fleetdb.Attestation{
 		VMID:               vm.ID,
@@ -260,4 +278,48 @@ func pcrsToMap(pcrs []*orchpb.AttestResponse_PcrDigest) map[string]string {
 		out[strconv.Itoa(int(p.Index))] = hex.EncodeToString(p.Sha256)
 	}
 	return out
+}
+
+// checkPolicy compares observed PCRs against the registered expected
+// PCRs for `gen`. Returns ("", "") when the policy passes (or when
+// TOFU was enabled and just auto-registered the baseline). Returns
+// ("invalid", details) on mismatch and ("", "") when no policy is
+// registered and TOFU is off — the attestation stays "valid" since
+// the operator hasn't asked us to enforce anything yet.
+func (p *Poller) checkPolicy(ctx context.Context, gen int32, observed map[string]string) (string, string) {
+	expected, err := p.DB.GetExpectedPCRs(ctx, gen)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if p.Config.TOFU {
+			if err := p.DB.UpsertExpectedPCRs(ctx, gen, observed,
+				"auto-registered by attestpoll TOFU"); err != nil {
+				log.Printf("[attestpoll] TOFU register gen=%d: %v", gen, err)
+				return "invalid", "TOFU register failed: " + err.Error()
+			}
+			log.Printf("[attestpoll] TOFU registered baseline for generation %d (%d PCRs)",
+				gen, len(observed))
+			return "", ""
+		}
+		return "", "" // no policy registered, treat as valid
+	}
+	if err != nil {
+		return "invalid", "policy lookup failed: " + err.Error()
+	}
+
+	// Compare every PCR that the policy mentions
+	var mismatches []string
+	for idx, want := range expected.PCRs {
+		got, ok := observed[idx]
+		if !ok {
+			mismatches = append(mismatches, fmt.Sprintf("PCR[%s] missing in attestation", idx))
+			continue
+		}
+		if !strings.EqualFold(got, want) {
+			mismatches = append(mismatches, fmt.Sprintf("PCR[%s] got=%s want=%s", idx, got, want))
+		}
+	}
+	if len(mismatches) > 0 {
+		sort.Strings(mismatches)
+		return "invalid", "policy mismatch for gen " + strconv.Itoa(int(gen)) + ": " + strings.Join(mismatches, "; ")
+	}
+	return "", ""
 }

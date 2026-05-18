@@ -67,3 +67,14 @@ export interface FleetEvent {
 export interface EventListResponse {
 	events: FleetEvent[];
 }
+
+export interface Generation {
+	generation: number;
+	pcrs: Record<string, string>;
+	description?: string;
+	created_at: string;
+}
+
+export interface GenerationListResponse {
+	generations: Generation[];
+}

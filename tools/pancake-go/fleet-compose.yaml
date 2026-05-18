@@ -45,6 +45,12 @@ services:
     command:
       - "-http-addr=:8080"
       - "-grpc-addr=:8081"
+      - "-web-ui=/var/lib/pancake-fleet-ui"
+      # Attestation poller defaults to enabled. Mount mTLS materials
+      # under /etc/pancake-fleet/ and pass --attest-{ca,cert,key}-file
+      # to talk to pancaked instances. In dev you can either leave it
+      # insecure (omit all three flags) or bind-mount the existing
+      # pancake-host-state/ directory and reference the files here.
 
 volumes:
   pancake-fleet-db-data:
