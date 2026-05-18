@@ -40,16 +40,15 @@ outputs:
   bzimage:   ./pancake-bzImage
   efi:       ./pancake-efi.img
 
-orchestrator:
-  # Unified CA mode: only ca-url is required.
-  # For QEMU usernet, 10.0.2.2 is the host.
-  # Used as the default for issuance.step-ca.url when that's unset.
-  ca-url: https://10.0.2.2:8443/acme/tpm/directory
+# Unified CA mode: only ca-url is required.
+# For QEMU usernet, 10.0.2.2 is the host.
+# Used as the default for issuance.step-ca.url when that's unset.
+ca-url: https://10.0.2.2:8443/acme/tpm/directory
 
-  # Optional: pancake-fleet-server gRPC address. When set, `pancake
-  # enroll` will register this VM with the fleet server after the ACME
-  # flow succeeds, so it shows up in the dashboard automatically.
-  # fleet-server: 10.0.2.2:8081
+# Optional: pancake-fleet-server gRPC address. When set, `pancake
+# enroll` will register this VM with the fleet server after the ACME
+# flow succeeds, so it shows up in the dashboard automatically.
+# fleet-server: 10.0.2.2:8081
 
 # Attestation: where the EK certificate's trust anchor comes from.
 # Defaults from platform:
@@ -66,7 +65,7 @@ orchestrator:
 # issuance:
 #   ca: step-ca          # or: gcp-cas
 #   step-ca:
-#     url: https://...   # falls back to orchestrator.ca-url when unset
+#     url: https://...   # falls back to top-level ca-url when unset
 #   cas:
 #     pool: projects/<proj>/locations/<region>/caPools/<pool>
 

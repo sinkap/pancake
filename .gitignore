@@ -1,5 +1,6 @@
-# Compiled C binary
+# Compiled C binaries
 pivot-root
+tools/initramfs/mount-overlay
 
 # Rendered slide artifacts
 slides.pdf
@@ -13,6 +14,7 @@ vm/share/
 # Runtime VM state
 vm/vm.log
 vm/vm.pid
+vm-state/
 
 # Private keys (never commit)
 vm/keys/
@@ -28,8 +30,20 @@ vm/keys/
 # Build object files
 *.o
 *.a
-initramfs/mount-overlay
-pancake-state.img
-tools/pancake-go/pancake
-tools/pancake-go/pancaked
-tools/pancake-go/pancake-build-server
+
+# Pancake Go-built binaries (lands at repo root)
+/pancake
+/pancaked
+/pancake-build-server
+
+# Pancake build artifacts (large, regenerable)
+/pancake-*.img
+/pancake-*.cpio.gz
+/pancake-bzImage
+/pancake-state.img.fresh
+
+# Operator runtime dirs / files
+/bin/
+/pancake-host-state/
+/pancake-kit/
+/pancake-recipe.yaml

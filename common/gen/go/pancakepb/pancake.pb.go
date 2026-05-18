@@ -19,7 +19,7 @@
 // 	protoc        v3.21.12
 // source: pancake.proto
 
-package orchpb
+package pancakepb
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -704,13 +704,13 @@ const file_pancake_proto_rawDesc = "" +
 	"\x05nonce\x18\x01 \x01(\fR\x05nonce\"K\n" +
 	"\x14AttestSEVSNPResponse\x12\x16\n" +
 	"\x06report\x18\x01 \x01(\fR\x06report\x12\x1b\n" +
-	"\tvcek_cert\x18\x02 \x01(\fR\bvcekCert2\x91\x03\n" +
-	"\aPancake\x12Q\n" +
+	"\tvcek_cert\x18\x02 \x01(\fR\bvcekCert2\x9d\x03\n" +
+	"\x13PancakeAgentService\x12Q\n" +
 	"\x12GetCurrentManifest\x12%.pancake.v1.GetCurrentManifestRequest\x1a\x14.pancake.v1.Manifest\x12:\n" +
 	"\x06Update\x12\x14.pancake.v1.Manifest\x1a\x1a.pancake.v1.UpdateResponse\x12?\n" +
 	"\x06Attest\x12\x19.pancake.v1.AttestRequest\x1a\x1a.pancake.v1.AttestResponse\x12c\n" +
 	"\x12ActivateCredential\x12%.pancake.v1.ActivateCredentialRequest\x1a&.pancake.v1.ActivateCredentialResponse\x12Q\n" +
-	"\fAttestSEVSNP\x12\x1f.pancake.v1.AttestSEVSNPRequest\x1a .pancake.v1.AttestSEVSNPResponseB<Z:github.com/sinkap/pancake/tools/pancake-go/internal/orchpbb\x06proto3"
+	"\fAttestSEVSNP\x12\x1f.pancake.v1.AttestSEVSNPRequest\x1a .pancake.v1.AttestSEVSNPResponseB3Z1github.com/sinkap/pancake/common/gen/go/pancakepbb\x06proto3"
 
 var (
 	file_pancake_proto_rawDescOnce sync.Once
@@ -739,16 +739,16 @@ var file_pancake_proto_goTypes = []any{
 }
 var file_pancake_proto_depIdxs = []int32{
 	9, // 0: pancake.v1.AttestResponse.pcr:type_name -> pancake.v1.AttestResponse.PcrDigest
-	0, // 1: pancake.v1.Pancake.GetCurrentManifest:input_type -> pancake.v1.GetCurrentManifestRequest
-	1, // 2: pancake.v1.Pancake.Update:input_type -> pancake.v1.Manifest
-	3, // 3: pancake.v1.Pancake.Attest:input_type -> pancake.v1.AttestRequest
-	5, // 4: pancake.v1.Pancake.ActivateCredential:input_type -> pancake.v1.ActivateCredentialRequest
-	7, // 5: pancake.v1.Pancake.AttestSEVSNP:input_type -> pancake.v1.AttestSEVSNPRequest
-	1, // 6: pancake.v1.Pancake.GetCurrentManifest:output_type -> pancake.v1.Manifest
-	2, // 7: pancake.v1.Pancake.Update:output_type -> pancake.v1.UpdateResponse
-	4, // 8: pancake.v1.Pancake.Attest:output_type -> pancake.v1.AttestResponse
-	6, // 9: pancake.v1.Pancake.ActivateCredential:output_type -> pancake.v1.ActivateCredentialResponse
-	8, // 10: pancake.v1.Pancake.AttestSEVSNP:output_type -> pancake.v1.AttestSEVSNPResponse
+	0, // 1: pancake.v1.PancakeAgentService.GetCurrentManifest:input_type -> pancake.v1.GetCurrentManifestRequest
+	1, // 2: pancake.v1.PancakeAgentService.Update:input_type -> pancake.v1.Manifest
+	3, // 3: pancake.v1.PancakeAgentService.Attest:input_type -> pancake.v1.AttestRequest
+	5, // 4: pancake.v1.PancakeAgentService.ActivateCredential:input_type -> pancake.v1.ActivateCredentialRequest
+	7, // 5: pancake.v1.PancakeAgentService.AttestSEVSNP:input_type -> pancake.v1.AttestSEVSNPRequest
+	1, // 6: pancake.v1.PancakeAgentService.GetCurrentManifest:output_type -> pancake.v1.Manifest
+	2, // 7: pancake.v1.PancakeAgentService.Update:output_type -> pancake.v1.UpdateResponse
+	4, // 8: pancake.v1.PancakeAgentService.Attest:output_type -> pancake.v1.AttestResponse
+	6, // 9: pancake.v1.PancakeAgentService.ActivateCredential:output_type -> pancake.v1.ActivateCredentialResponse
+	8, // 10: pancake.v1.PancakeAgentService.AttestSEVSNP:output_type -> pancake.v1.AttestSEVSNPResponse
 	6, // [6:11] is the sub-list for method output_type
 	1, // [1:6] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name

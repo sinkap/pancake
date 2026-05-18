@@ -19,7 +19,7 @@
 // - protoc             v3.21.12
 // source: pancake.proto
 
-package orchpb
+package pancakepb
 
 import (
 	context "context"
@@ -34,17 +34,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Pancake_GetCurrentManifest_FullMethodName = "/pancake.v1.Pancake/GetCurrentManifest"
-	Pancake_Update_FullMethodName             = "/pancake.v1.Pancake/Update"
-	Pancake_Attest_FullMethodName             = "/pancake.v1.Pancake/Attest"
-	Pancake_ActivateCredential_FullMethodName = "/pancake.v1.Pancake/ActivateCredential"
-	Pancake_AttestSEVSNP_FullMethodName       = "/pancake.v1.Pancake/AttestSEVSNP"
+	PancakeAgentService_GetCurrentManifest_FullMethodName = "/pancake.v1.PancakeAgentService/GetCurrentManifest"
+	PancakeAgentService_Update_FullMethodName             = "/pancake.v1.PancakeAgentService/Update"
+	PancakeAgentService_Attest_FullMethodName             = "/pancake.v1.PancakeAgentService/Attest"
+	PancakeAgentService_ActivateCredential_FullMethodName = "/pancake.v1.PancakeAgentService/ActivateCredential"
+	PancakeAgentService_AttestSEVSNP_FullMethodName       = "/pancake.v1.PancakeAgentService/AttestSEVSNP"
 )
 
-// PancakeClient is the client API for Pancake service.
+// PancakeAgentServiceClient is the client API for PancakeAgentService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type PancakeClient interface {
+type PancakeAgentServiceClient interface {
 	// GetCurrentManifest returns the manifest of the generation that
 	// `current` symlinks to (i.e., what the VM is "supposed to be on";
 	// not necessarily what it's actively running, since `pancake swap`
@@ -96,68 +96,68 @@ type PancakeClient interface {
 	AttestSEVSNP(ctx context.Context, in *AttestSEVSNPRequest, opts ...grpc.CallOption) (*AttestSEVSNPResponse, error)
 }
 
-type pancakeClient struct {
+type pancakeAgentServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewPancakeClient(cc grpc.ClientConnInterface) PancakeClient {
-	return &pancakeClient{cc}
+func NewPancakeAgentServiceClient(cc grpc.ClientConnInterface) PancakeAgentServiceClient {
+	return &pancakeAgentServiceClient{cc}
 }
 
-func (c *pancakeClient) GetCurrentManifest(ctx context.Context, in *GetCurrentManifestRequest, opts ...grpc.CallOption) (*Manifest, error) {
+func (c *pancakeAgentServiceClient) GetCurrentManifest(ctx context.Context, in *GetCurrentManifestRequest, opts ...grpc.CallOption) (*Manifest, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Manifest)
-	err := c.cc.Invoke(ctx, Pancake_GetCurrentManifest_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, PancakeAgentService_GetCurrentManifest_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *pancakeClient) Update(ctx context.Context, in *Manifest, opts ...grpc.CallOption) (*UpdateResponse, error) {
+func (c *pancakeAgentServiceClient) Update(ctx context.Context, in *Manifest, opts ...grpc.CallOption) (*UpdateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateResponse)
-	err := c.cc.Invoke(ctx, Pancake_Update_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, PancakeAgentService_Update_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *pancakeClient) Attest(ctx context.Context, in *AttestRequest, opts ...grpc.CallOption) (*AttestResponse, error) {
+func (c *pancakeAgentServiceClient) Attest(ctx context.Context, in *AttestRequest, opts ...grpc.CallOption) (*AttestResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AttestResponse)
-	err := c.cc.Invoke(ctx, Pancake_Attest_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, PancakeAgentService_Attest_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *pancakeClient) ActivateCredential(ctx context.Context, in *ActivateCredentialRequest, opts ...grpc.CallOption) (*ActivateCredentialResponse, error) {
+func (c *pancakeAgentServiceClient) ActivateCredential(ctx context.Context, in *ActivateCredentialRequest, opts ...grpc.CallOption) (*ActivateCredentialResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ActivateCredentialResponse)
-	err := c.cc.Invoke(ctx, Pancake_ActivateCredential_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, PancakeAgentService_ActivateCredential_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *pancakeClient) AttestSEVSNP(ctx context.Context, in *AttestSEVSNPRequest, opts ...grpc.CallOption) (*AttestSEVSNPResponse, error) {
+func (c *pancakeAgentServiceClient) AttestSEVSNP(ctx context.Context, in *AttestSEVSNPRequest, opts ...grpc.CallOption) (*AttestSEVSNPResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AttestSEVSNPResponse)
-	err := c.cc.Invoke(ctx, Pancake_AttestSEVSNP_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, PancakeAgentService_AttestSEVSNP_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// PancakeServer is the server API for Pancake service.
-// All implementations must embed UnimplementedPancakeServer
+// PancakeAgentServiceServer is the server API for PancakeAgentService service.
+// All implementations must embed UnimplementedPancakeAgentServiceServer
 // for forward compatibility.
-type PancakeServer interface {
+type PancakeAgentServiceServer interface {
 	// GetCurrentManifest returns the manifest of the generation that
 	// `current` symlinks to (i.e., what the VM is "supposed to be on";
 	// not necessarily what it's actively running, since `pancake swap`
@@ -207,168 +207,168 @@ type PancakeServer interface {
 	// generation manifest) against the per-VM TPM. `pancake attest
 	// --mode=both` runs both for defense in depth.
 	AttestSEVSNP(context.Context, *AttestSEVSNPRequest) (*AttestSEVSNPResponse, error)
-	mustEmbedUnimplementedPancakeServer()
+	mustEmbedUnimplementedPancakeAgentServiceServer()
 }
 
-// UnimplementedPancakeServer must be embedded to have
+// UnimplementedPancakeAgentServiceServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedPancakeServer struct{}
+type UnimplementedPancakeAgentServiceServer struct{}
 
-func (UnimplementedPancakeServer) GetCurrentManifest(context.Context, *GetCurrentManifestRequest) (*Manifest, error) {
+func (UnimplementedPancakeAgentServiceServer) GetCurrentManifest(context.Context, *GetCurrentManifestRequest) (*Manifest, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCurrentManifest not implemented")
 }
-func (UnimplementedPancakeServer) Update(context.Context, *Manifest) (*UpdateResponse, error) {
+func (UnimplementedPancakeAgentServiceServer) Update(context.Context, *Manifest) (*UpdateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Update not implemented")
 }
-func (UnimplementedPancakeServer) Attest(context.Context, *AttestRequest) (*AttestResponse, error) {
+func (UnimplementedPancakeAgentServiceServer) Attest(context.Context, *AttestRequest) (*AttestResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Attest not implemented")
 }
-func (UnimplementedPancakeServer) ActivateCredential(context.Context, *ActivateCredentialRequest) (*ActivateCredentialResponse, error) {
+func (UnimplementedPancakeAgentServiceServer) ActivateCredential(context.Context, *ActivateCredentialRequest) (*ActivateCredentialResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ActivateCredential not implemented")
 }
-func (UnimplementedPancakeServer) AttestSEVSNP(context.Context, *AttestSEVSNPRequest) (*AttestSEVSNPResponse, error) {
+func (UnimplementedPancakeAgentServiceServer) AttestSEVSNP(context.Context, *AttestSEVSNPRequest) (*AttestSEVSNPResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AttestSEVSNP not implemented")
 }
-func (UnimplementedPancakeServer) mustEmbedUnimplementedPancakeServer() {}
-func (UnimplementedPancakeServer) testEmbeddedByValue()                 {}
+func (UnimplementedPancakeAgentServiceServer) mustEmbedUnimplementedPancakeAgentServiceServer() {}
+func (UnimplementedPancakeAgentServiceServer) testEmbeddedByValue()                             {}
 
-// UnsafePancakeServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to PancakeServer will
+// UnsafePancakeAgentServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PancakeAgentServiceServer will
 // result in compilation errors.
-type UnsafePancakeServer interface {
-	mustEmbedUnimplementedPancakeServer()
+type UnsafePancakeAgentServiceServer interface {
+	mustEmbedUnimplementedPancakeAgentServiceServer()
 }
 
-func RegisterPancakeServer(s grpc.ServiceRegistrar, srv PancakeServer) {
-	// If the following call panics, it indicates UnimplementedPancakeServer was
+func RegisterPancakeAgentServiceServer(s grpc.ServiceRegistrar, srv PancakeAgentServiceServer) {
+	// If the following call panics, it indicates UnimplementedPancakeAgentServiceServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&Pancake_ServiceDesc, srv)
+	s.RegisterService(&PancakeAgentService_ServiceDesc, srv)
 }
 
-func _Pancake_GetCurrentManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _PancakeAgentService_GetCurrentManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetCurrentManifestRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PancakeServer).GetCurrentManifest(ctx, in)
+		return srv.(PancakeAgentServiceServer).GetCurrentManifest(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Pancake_GetCurrentManifest_FullMethodName,
+		FullMethod: PancakeAgentService_GetCurrentManifest_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PancakeServer).GetCurrentManifest(ctx, req.(*GetCurrentManifestRequest))
+		return srv.(PancakeAgentServiceServer).GetCurrentManifest(ctx, req.(*GetCurrentManifestRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Pancake_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _PancakeAgentService_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Manifest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PancakeServer).Update(ctx, in)
+		return srv.(PancakeAgentServiceServer).Update(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Pancake_Update_FullMethodName,
+		FullMethod: PancakeAgentService_Update_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PancakeServer).Update(ctx, req.(*Manifest))
+		return srv.(PancakeAgentServiceServer).Update(ctx, req.(*Manifest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Pancake_Attest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _PancakeAgentService_Attest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AttestRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PancakeServer).Attest(ctx, in)
+		return srv.(PancakeAgentServiceServer).Attest(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Pancake_Attest_FullMethodName,
+		FullMethod: PancakeAgentService_Attest_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PancakeServer).Attest(ctx, req.(*AttestRequest))
+		return srv.(PancakeAgentServiceServer).Attest(ctx, req.(*AttestRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Pancake_ActivateCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _PancakeAgentService_ActivateCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ActivateCredentialRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PancakeServer).ActivateCredential(ctx, in)
+		return srv.(PancakeAgentServiceServer).ActivateCredential(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Pancake_ActivateCredential_FullMethodName,
+		FullMethod: PancakeAgentService_ActivateCredential_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PancakeServer).ActivateCredential(ctx, req.(*ActivateCredentialRequest))
+		return srv.(PancakeAgentServiceServer).ActivateCredential(ctx, req.(*ActivateCredentialRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Pancake_AttestSEVSNP_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _PancakeAgentService_AttestSEVSNP_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AttestSEVSNPRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PancakeServer).AttestSEVSNP(ctx, in)
+		return srv.(PancakeAgentServiceServer).AttestSEVSNP(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Pancake_AttestSEVSNP_FullMethodName,
+		FullMethod: PancakeAgentService_AttestSEVSNP_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PancakeServer).AttestSEVSNP(ctx, req.(*AttestSEVSNPRequest))
+		return srv.(PancakeAgentServiceServer).AttestSEVSNP(ctx, req.(*AttestSEVSNPRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// Pancake_ServiceDesc is the grpc.ServiceDesc for Pancake service.
+// PancakeAgentService_ServiceDesc is the grpc.ServiceDesc for PancakeAgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var Pancake_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "pancake.v1.Pancake",
-	HandlerType: (*PancakeServer)(nil),
+var PancakeAgentService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "pancake.v1.PancakeAgentService",
+	HandlerType: (*PancakeAgentServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "GetCurrentManifest",
-			Handler:    _Pancake_GetCurrentManifest_Handler,
+			Handler:    _PancakeAgentService_GetCurrentManifest_Handler,
 		},
 		{
 			MethodName: "Update",
-			Handler:    _Pancake_Update_Handler,
+			Handler:    _PancakeAgentService_Update_Handler,
 		},
 		{
 			MethodName: "Attest",
-			Handler:    _Pancake_Attest_Handler,
+			Handler:    _PancakeAgentService_Attest_Handler,
 		},
 		{
 			MethodName: "ActivateCredential",
-			Handler:    _Pancake_ActivateCredential_Handler,
+			Handler:    _PancakeAgentService_ActivateCredential_Handler,
 		},
 		{
 			MethodName: "AttestSEVSNP",
-			Handler:    _Pancake_AttestSEVSNP_Handler,
+			Handler:    _PancakeAgentService_AttestSEVSNP_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

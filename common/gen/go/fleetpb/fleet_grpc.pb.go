@@ -4,7 +4,7 @@
 // Operators (or background workers) call list/attest RPCs to inspect
 // + verify the fleet.
 //
-// Pancaked on each VM already exposes the Attest RPC (see orchpb).
+// Pancaked on each VM already exposes the Attest RPC (see pancakepb).
 // The fleet server is the orchestrator-side aggregator: it discovers
 // VMs (auto-registered via Enroll), polls them for attestations,
 // stores results in PostgreSQL, and surfaces the data via the web UI.
@@ -30,16 +30,16 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	FleetManager_Enroll_FullMethodName    = "/pancake.fleet.v1.FleetManager/Enroll"
-	FleetManager_Heartbeat_FullMethodName = "/pancake.fleet.v1.FleetManager/Heartbeat"
-	FleetManager_ListVMs_FullMethodName   = "/pancake.fleet.v1.FleetManager/ListVMs"
-	FleetManager_GetVM_FullMethodName     = "/pancake.fleet.v1.FleetManager/GetVM"
+	PancakeFleetService_Enroll_FullMethodName    = "/pancake.fleet.v1.PancakeFleetService/Enroll"
+	PancakeFleetService_Heartbeat_FullMethodName = "/pancake.fleet.v1.PancakeFleetService/Heartbeat"
+	PancakeFleetService_ListVMs_FullMethodName   = "/pancake.fleet.v1.PancakeFleetService/ListVMs"
+	PancakeFleetService_GetVM_FullMethodName     = "/pancake.fleet.v1.PancakeFleetService/GetVM"
 )
 
-// FleetManagerClient is the client API for FleetManager service.
+// PancakeFleetServiceClient is the client API for PancakeFleetService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type FleetManagerClient interface {
+type PancakeFleetServiceClient interface {
 	// Enroll registers a VM with the fleet. Called on first boot.
 	// Idempotent: re-calling with the same name updates the existing row
 	// (refreshes metadata, IP, certificate info).
@@ -54,58 +54,58 @@ type FleetManagerClient interface {
 	GetVM(ctx context.Context, in *GetVMRequest, opts ...grpc.CallOption) (*VM, error)
 }
 
-type fleetManagerClient struct {
+type pancakeFleetServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewFleetManagerClient(cc grpc.ClientConnInterface) FleetManagerClient {
-	return &fleetManagerClient{cc}
+func NewPancakeFleetServiceClient(cc grpc.ClientConnInterface) PancakeFleetServiceClient {
+	return &pancakeFleetServiceClient{cc}
 }
 
-func (c *fleetManagerClient) Enroll(ctx context.Context, in *EnrollRequest, opts ...grpc.CallOption) (*EnrollResponse, error) {
+func (c *pancakeFleetServiceClient) Enroll(ctx context.Context, in *EnrollRequest, opts ...grpc.CallOption) (*EnrollResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EnrollResponse)
-	err := c.cc.Invoke(ctx, FleetManager_Enroll_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, PancakeFleetService_Enroll_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *fleetManagerClient) Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error) {
+func (c *pancakeFleetServiceClient) Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HeartbeatResponse)
-	err := c.cc.Invoke(ctx, FleetManager_Heartbeat_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, PancakeFleetService_Heartbeat_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *fleetManagerClient) ListVMs(ctx context.Context, in *ListVMsRequest, opts ...grpc.CallOption) (*ListVMsResponse, error) {
+func (c *pancakeFleetServiceClient) ListVMs(ctx context.Context, in *ListVMsRequest, opts ...grpc.CallOption) (*ListVMsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListVMsResponse)
-	err := c.cc.Invoke(ctx, FleetManager_ListVMs_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, PancakeFleetService_ListVMs_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *fleetManagerClient) GetVM(ctx context.Context, in *GetVMRequest, opts ...grpc.CallOption) (*VM, error) {
+func (c *pancakeFleetServiceClient) GetVM(ctx context.Context, in *GetVMRequest, opts ...grpc.CallOption) (*VM, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(VM)
-	err := c.cc.Invoke(ctx, FleetManager_GetVM_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, PancakeFleetService_GetVM_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// FleetManagerServer is the server API for FleetManager service.
-// All implementations must embed UnimplementedFleetManagerServer
+// PancakeFleetServiceServer is the server API for PancakeFleetService service.
+// All implementations must embed UnimplementedPancakeFleetServiceServer
 // for forward compatibility.
-type FleetManagerServer interface {
+type PancakeFleetServiceServer interface {
 	// Enroll registers a VM with the fleet. Called on first boot.
 	// Idempotent: re-calling with the same name updates the existing row
 	// (refreshes metadata, IP, certificate info).
@@ -118,143 +118,143 @@ type FleetManagerServer interface {
 	ListVMs(context.Context, *ListVMsRequest) (*ListVMsResponse, error)
 	// GetVM fetches one VM by name or id (one-of in request).
 	GetVM(context.Context, *GetVMRequest) (*VM, error)
-	mustEmbedUnimplementedFleetManagerServer()
+	mustEmbedUnimplementedPancakeFleetServiceServer()
 }
 
-// UnimplementedFleetManagerServer must be embedded to have
+// UnimplementedPancakeFleetServiceServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedFleetManagerServer struct{}
+type UnimplementedPancakeFleetServiceServer struct{}
 
-func (UnimplementedFleetManagerServer) Enroll(context.Context, *EnrollRequest) (*EnrollResponse, error) {
+func (UnimplementedPancakeFleetServiceServer) Enroll(context.Context, *EnrollRequest) (*EnrollResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Enroll not implemented")
 }
-func (UnimplementedFleetManagerServer) Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
+func (UnimplementedPancakeFleetServiceServer) Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Heartbeat not implemented")
 }
-func (UnimplementedFleetManagerServer) ListVMs(context.Context, *ListVMsRequest) (*ListVMsResponse, error) {
+func (UnimplementedPancakeFleetServiceServer) ListVMs(context.Context, *ListVMsRequest) (*ListVMsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListVMs not implemented")
 }
-func (UnimplementedFleetManagerServer) GetVM(context.Context, *GetVMRequest) (*VM, error) {
+func (UnimplementedPancakeFleetServiceServer) GetVM(context.Context, *GetVMRequest) (*VM, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetVM not implemented")
 }
-func (UnimplementedFleetManagerServer) mustEmbedUnimplementedFleetManagerServer() {}
-func (UnimplementedFleetManagerServer) testEmbeddedByValue()                      {}
+func (UnimplementedPancakeFleetServiceServer) mustEmbedUnimplementedPancakeFleetServiceServer() {}
+func (UnimplementedPancakeFleetServiceServer) testEmbeddedByValue()                             {}
 
-// UnsafeFleetManagerServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to FleetManagerServer will
+// UnsafePancakeFleetServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PancakeFleetServiceServer will
 // result in compilation errors.
-type UnsafeFleetManagerServer interface {
-	mustEmbedUnimplementedFleetManagerServer()
+type UnsafePancakeFleetServiceServer interface {
+	mustEmbedUnimplementedPancakeFleetServiceServer()
 }
 
-func RegisterFleetManagerServer(s grpc.ServiceRegistrar, srv FleetManagerServer) {
-	// If the following call panics, it indicates UnimplementedFleetManagerServer was
+func RegisterPancakeFleetServiceServer(s grpc.ServiceRegistrar, srv PancakeFleetServiceServer) {
+	// If the following call panics, it indicates UnimplementedPancakeFleetServiceServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&FleetManager_ServiceDesc, srv)
+	s.RegisterService(&PancakeFleetService_ServiceDesc, srv)
 }
 
-func _FleetManager_Enroll_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _PancakeFleetService_Enroll_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EnrollRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(FleetManagerServer).Enroll(ctx, in)
+		return srv.(PancakeFleetServiceServer).Enroll(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: FleetManager_Enroll_FullMethodName,
+		FullMethod: PancakeFleetService_Enroll_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FleetManagerServer).Enroll(ctx, req.(*EnrollRequest))
+		return srv.(PancakeFleetServiceServer).Enroll(ctx, req.(*EnrollRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _FleetManager_Heartbeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _PancakeFleetService_Heartbeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HeartbeatRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(FleetManagerServer).Heartbeat(ctx, in)
+		return srv.(PancakeFleetServiceServer).Heartbeat(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: FleetManager_Heartbeat_FullMethodName,
+		FullMethod: PancakeFleetService_Heartbeat_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FleetManagerServer).Heartbeat(ctx, req.(*HeartbeatRequest))
+		return srv.(PancakeFleetServiceServer).Heartbeat(ctx, req.(*HeartbeatRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _FleetManager_ListVMs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _PancakeFleetService_ListVMs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListVMsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(FleetManagerServer).ListVMs(ctx, in)
+		return srv.(PancakeFleetServiceServer).ListVMs(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: FleetManager_ListVMs_FullMethodName,
+		FullMethod: PancakeFleetService_ListVMs_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FleetManagerServer).ListVMs(ctx, req.(*ListVMsRequest))
+		return srv.(PancakeFleetServiceServer).ListVMs(ctx, req.(*ListVMsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _FleetManager_GetVM_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _PancakeFleetService_GetVM_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetVMRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(FleetManagerServer).GetVM(ctx, in)
+		return srv.(PancakeFleetServiceServer).GetVM(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: FleetManager_GetVM_FullMethodName,
+		FullMethod: PancakeFleetService_GetVM_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FleetManagerServer).GetVM(ctx, req.(*GetVMRequest))
+		return srv.(PancakeFleetServiceServer).GetVM(ctx, req.(*GetVMRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// FleetManager_ServiceDesc is the grpc.ServiceDesc for FleetManager service.
+// PancakeFleetService_ServiceDesc is the grpc.ServiceDesc for PancakeFleetService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var FleetManager_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "pancake.fleet.v1.FleetManager",
-	HandlerType: (*FleetManagerServer)(nil),
+var PancakeFleetService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "pancake.fleet.v1.PancakeFleetService",
+	HandlerType: (*PancakeFleetServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "Enroll",
-			Handler:    _FleetManager_Enroll_Handler,
+			Handler:    _PancakeFleetService_Enroll_Handler,
 		},
 		{
 			MethodName: "Heartbeat",
-			Handler:    _FleetManager_Heartbeat_Handler,
+			Handler:    _PancakeFleetService_Heartbeat_Handler,
 		},
 		{
 			MethodName: "ListVMs",
-			Handler:    _FleetManager_ListVMs_Handler,
+			Handler:    _PancakeFleetService_ListVMs_Handler,
 		},
 		{
 			MethodName: "GetVM",
-			Handler:    _FleetManager_GetVM_Handler,
+			Handler:    _PancakeFleetService_GetVM_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

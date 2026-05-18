@@ -1,0 +1,4 @@
+# Thin shim so `docker compose up -d` works from the repo root.
+# Real config lives in deployment/docker/compose.yaml.
+include:
+  - deployment/docker/compose.yaml

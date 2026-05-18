@@ -4,7 +4,7 @@
 // Operators (or background workers) call list/attest RPCs to inspect
 // + verify the fleet.
 //
-// Pancaked on each VM already exposes the Attest RPC (see orchpb).
+// Pancaked on each VM already exposes the Attest RPC (see pancakepb).
 // The fleet server is the orchestrator-side aggregator: it discovers
 // VMs (auto-registered via Enroll), polls them for attestations,
 // stores results in PostgreSQL, and surfaces the data via the web UI.
@@ -701,12 +701,12 @@ const file_fleet_proto_rawDesc = "" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\x0flastAttestation\x12-\n" +
 	"\x12attestation_status\x18\v \x01(\tR\x11attestationStatus\x12-\n" +
 	"\x12current_generation\x18\f \x01(\x05R\x11currentGeneration\x12#\n" +
-	"\rmetadata_json\x18\r \x01(\tR\fmetadataJson2\xc0\x02\n" +
-	"\fFleetManager\x12K\n" +
+	"\rmetadata_json\x18\r \x01(\tR\fmetadataJson2\xc7\x02\n" +
+	"\x13PancakeFleetService\x12K\n" +
 	"\x06Enroll\x12\x1f.pancake.fleet.v1.EnrollRequest\x1a .pancake.fleet.v1.EnrollResponse\x12T\n" +
 	"\tHeartbeat\x12\".pancake.fleet.v1.HeartbeatRequest\x1a#.pancake.fleet.v1.HeartbeatResponse\x12N\n" +
 	"\aListVMs\x12 .pancake.fleet.v1.ListVMsRequest\x1a!.pancake.fleet.v1.ListVMsResponse\x12=\n" +
-	"\x05GetVM\x12\x1e.pancake.fleet.v1.GetVMRequest\x1a\x14.pancake.fleet.v1.VMB=Z;github.com/sinkap/pancake/tools/pancake-go/internal/fleetpbb\x06proto3"
+	"\x05GetVM\x12\x1e.pancake.fleet.v1.GetVMRequest\x1a\x14.pancake.fleet.v1.VMB1Z/github.com/sinkap/pancake/common/gen/go/fleetpbb\x06proto3"
 
 var (
 	file_fleet_proto_rawDescOnce sync.Once
@@ -739,14 +739,14 @@ var file_fleet_proto_depIdxs = []int32{
 	8,  // 3: pancake.fleet.v1.VM.cert_expires_at:type_name -> google.protobuf.Timestamp
 	8,  // 4: pancake.fleet.v1.VM.last_heartbeat:type_name -> google.protobuf.Timestamp
 	8,  // 5: pancake.fleet.v1.VM.last_attestation:type_name -> google.protobuf.Timestamp
-	0,  // 6: pancake.fleet.v1.FleetManager.Enroll:input_type -> pancake.fleet.v1.EnrollRequest
-	2,  // 7: pancake.fleet.v1.FleetManager.Heartbeat:input_type -> pancake.fleet.v1.HeartbeatRequest
-	4,  // 8: pancake.fleet.v1.FleetManager.ListVMs:input_type -> pancake.fleet.v1.ListVMsRequest
-	6,  // 9: pancake.fleet.v1.FleetManager.GetVM:input_type -> pancake.fleet.v1.GetVMRequest
-	1,  // 10: pancake.fleet.v1.FleetManager.Enroll:output_type -> pancake.fleet.v1.EnrollResponse
-	3,  // 11: pancake.fleet.v1.FleetManager.Heartbeat:output_type -> pancake.fleet.v1.HeartbeatResponse
-	5,  // 12: pancake.fleet.v1.FleetManager.ListVMs:output_type -> pancake.fleet.v1.ListVMsResponse
-	7,  // 13: pancake.fleet.v1.FleetManager.GetVM:output_type -> pancake.fleet.v1.VM
+	0,  // 6: pancake.fleet.v1.PancakeFleetService.Enroll:input_type -> pancake.fleet.v1.EnrollRequest
+	2,  // 7: pancake.fleet.v1.PancakeFleetService.Heartbeat:input_type -> pancake.fleet.v1.HeartbeatRequest
+	4,  // 8: pancake.fleet.v1.PancakeFleetService.ListVMs:input_type -> pancake.fleet.v1.ListVMsRequest
+	6,  // 9: pancake.fleet.v1.PancakeFleetService.GetVM:input_type -> pancake.fleet.v1.GetVMRequest
+	1,  // 10: pancake.fleet.v1.PancakeFleetService.Enroll:output_type -> pancake.fleet.v1.EnrollResponse
+	3,  // 11: pancake.fleet.v1.PancakeFleetService.Heartbeat:output_type -> pancake.fleet.v1.HeartbeatResponse
+	5,  // 12: pancake.fleet.v1.PancakeFleetService.ListVMs:output_type -> pancake.fleet.v1.ListVMsResponse
+	7,  // 13: pancake.fleet.v1.PancakeFleetService.GetVM:output_type -> pancake.fleet.v1.VM
 	10, // [10:14] is the sub-list for method output_type
 	6,  // [6:10] is the sub-list for method input_type
 	6,  // [6:6] is the sub-list for extension type_name
