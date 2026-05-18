@@ -1,0 +1,38 @@
+# gcloud / Cloud Build upload exclusions.
+# Keep the source tree the three Dockerfiles need; drop image artifacts,
+# chroot staging, VM state, the linux-bpf-for-next worktree, etc.
+
+# Big build artifacts — top-level
+pancake-state.img
+pancake-efi.img
+pancake-initramfs.cpio.gz
+pancake-bzImage
+vm/
+
+# Big build artifacts — under tools/pancake-go/
+tools/pancake-go/vm-state/
+tools/pancake-go/pancake-kit/
+tools/pancake-go/pancake-state.img
+tools/pancake-go/pancake-efi.img
+tools/pancake-go/pancake-initramfs.cpio.gz
+tools/pancake-go/pancake-bzImage
+tools/pancake-go/pancake-host-state/
+tools/pancake-go/server/pancake-build-server
+tools/pancake-go/pancake
+tools/pancake-go/bin/
+
+# SvelteKit build artifacts (Dockerfile rebuilds them)
+tools/pancake-go/web-ui/node_modules/
+tools/pancake-go/web-ui/build/
+tools/pancake-go/web-ui/.svelte-kit/
+
+# Local generated keys, etc.
+tools/pancake-go/dev-ek-ca/
+*.tpm
+*.key
+
+# Git + VCS metadata is fine for Docker, but the .git pack files are big
+.git/
+.github/
+
+# Everything else: keep

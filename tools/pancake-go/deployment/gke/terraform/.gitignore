@@ -1,0 +1,8 @@
+.terraform/
+.terraform.tfstate.lock.info
+terraform.tfstate
+terraform.tfstate.*
+*.tfplan
+# Operator-supplied; contains project id / image tags, not secret per se
+# but a convention to not commit local values.
+terraform.tfvars

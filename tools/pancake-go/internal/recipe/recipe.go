@@ -84,15 +84,7 @@ type Recipe struct {
 }
 
 // Attestation configures how TPM attestation is performed.
-// Independent of Platform - you can run on GCE with custom attestation
-// (portable), or use gce-shielded (GCE-only, simpler).
 type Attestation struct {
-	// Mode selects the attestation backend (legacy, not yet consumed):
-	// - "custom" (default): pancake's TPM attestation, works on any platform
-	// - "gce-shielded": GCE Shielded VM API, only on GCE
-	// - "auto": try gce-shielded if available, fallback to custom
-	Mode string `yaml:"mode"`
-
 	// EKTrust picks where the EK certificate's trust anchor comes from:
 	//   "dev-ek-ca"   - locally generated self-signed CA, baked into the
 	//                   image. Used for swtpm dev where no real EK cert
@@ -197,6 +189,9 @@ type Outputs struct {
 }
 
 // GCE holds Google Cloud-specific configuration (when platform: gce).
+// Fleet-server URL goes in Orchestrator.FleetServer; VM deployment
+// settings (machine type, vTPM toggles) live in gcloud/terraform/the
+// instance template, not in the build recipe.
 type GCE struct {
 	Project string `yaml:"project"`
 	Zone    string `yaml:"zone"`
@@ -213,14 +208,6 @@ type GCE struct {
 	// ImageFamily is the GCE image family for rolling updates.
 	// Used when CreateImage is true.
 	ImageFamily string `yaml:"image-family"`
-
-	// Deployment defaults (used by fleet server, not bootstrap)
-	MachineType      string `yaml:"machine-type"`
-	EnableVTPM       bool   `yaml:"enable-vtpm"`
-	EnableSecureBoot bool   `yaml:"enable-secure-boot"`
-
-	// FleetServer is the fleet orchestrator URL VMs auto-register with on boot.
-	FleetServer string `yaml:"fleet-server"`
 }
 
 // Load reads + parses a recipe file. Strict mode: unknown YAML keys
